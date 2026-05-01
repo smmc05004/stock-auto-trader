@@ -8,6 +8,12 @@ const envSchema = z.object({
   TRADING_MODE: z.enum(["paper", "live"]).default("paper"),
   TRADING_MARKET: z.enum(["KR", "US"]).default("KR"),
   TRADING_BASE_CURRENCY: z.string().default("KRW"),
+  MAX_ORDER_VALUE: z.coerce.number().positive().default(1_000_000),
+  MAX_ORDER_QUANTITY: z.coerce.number().int().positive().default(10),
+  ALLOW_LIVE_TRADING: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
 });
 
 export const env = envSchema.parse({
@@ -18,4 +24,7 @@ export const env = envSchema.parse({
   TRADING_MODE: process.env.TRADING_MODE,
   TRADING_MARKET: process.env.TRADING_MARKET,
   TRADING_BASE_CURRENCY: process.env.TRADING_BASE_CURRENCY,
+  MAX_ORDER_VALUE: process.env.MAX_ORDER_VALUE,
+  MAX_ORDER_QUANTITY: process.env.MAX_ORDER_QUANTITY,
+  ALLOW_LIVE_TRADING: process.env.ALLOW_LIVE_TRADING,
 });

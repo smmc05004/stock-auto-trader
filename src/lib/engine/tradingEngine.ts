@@ -1,4 +1,5 @@
 import type { BrokerClient } from "@/lib/broker/broker";
+import { validateOrder } from "@/lib/engine/orderSafety";
 import type { TradingStrategy } from "@/lib/strategy/strategy";
 import type { TradingDecision } from "@/lib/types/trading";
 
@@ -29,11 +30,26 @@ export async function runStrategy({
     };
   }
 
+  const safetyCheck = validateOrder({
+    account,
+    order: signal.suggestedOrder,
+    quote,
+  });
+
+  if (!safetyCheck.allowed) {
+    return {
+      strategyName: strategy.name,
+      signal,
+      safetyCheck,
+    };
+  }
+
   const order = await broker.placeOrder(signal.suggestedOrder);
 
   return {
     strategyName: strategy.name,
     signal,
+    safetyCheck,
     order,
   };
 }

@@ -53,6 +53,14 @@ export type OrderResult = {
   requestedAt: string;
 };
 
+export type OrderSafetyCheck = {
+  allowed: boolean;
+  reasons: string[];
+  estimatedOrderValue: number;
+  maxOrderValue: number;
+  maxOrderQuantity: number;
+};
+
 export type TradingSignal = {
   symbol: string;
   action: SignalAction;
@@ -64,5 +72,6 @@ export type TradingSignal = {
 export type TradingDecision = {
   strategyName: string;
   signal: TradingSignal;
+  safetyCheck?: OrderSafetyCheck;
   order?: OrderResult;
 };
