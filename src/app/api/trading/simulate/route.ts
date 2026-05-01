@@ -10,16 +10,35 @@ const requestSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  const body = await request.json().catch(() => ({}));
-  const input = requestSchema.parse(body);
-  const broker = createBrokerClient();
+  try {
+    const body = await request.json().catch(() => ({}));
+    const input = requestSchema.parse(body);
+    const broker = createBrokerClient();
 
-  const decision = await runStrategy({
-    broker,
-    strategy: sampleMomentumStrategy,
-    symbol: input.symbol,
-    executeOrder: input.executeOrder,
-  });
+    const decision = await runStrategy({
+      broker,
+      strategy: sampleMomentumStrategy,
+      symbol: input.symbol,
+      executeOrder: input.executeOrder,
+    });
 
-  return NextResponse.json(decision);
+    return NextResponse.json(decision);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return NextResponse.json(
+        {
+          error: "Invalid simulation request.",
+          details: error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+
+    return NextResponse.json(
+      {
+        error: error instanceof Error ? error.message : "Failed to run trading simulation.",
+      },
+      { status: 500 },
+    );
+  }
 }

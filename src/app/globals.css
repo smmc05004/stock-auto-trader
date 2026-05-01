@@ -227,6 +227,106 @@ button {
   line-height: 1.6;
 }
 
+.empty-state {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.result-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.result-box {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.result-box span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.result-box strong {
+  font-size: 18px;
+}
+
+.result-box p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.result-box.buy,
+.result-box.success {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.result-box.sell,
+.result-box.warning {
+  border-color: #fedf89;
+  background: #fffbeb;
+}
+
+.result-box.danger {
+  border-color: #fecdca;
+  background: #fffbfa;
+}
+
+.result-box.neutral {
+  background: #f8fafc;
+}
+
+.result-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.result-meta div {
+  min-width: 0;
+}
+
+.result-meta dt {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.result-meta dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.reason-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--warning);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .notice {
   margin-top: 16px;
   padding: 14px;
@@ -253,6 +353,10 @@ button {
   }
 
   .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .result-meta {
     grid-template-columns: 1fr;
   }
 }
