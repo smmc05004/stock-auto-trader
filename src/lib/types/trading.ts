@@ -8,7 +8,7 @@ export type OrderType = "market" | "limit";
 
 export type SignalAction = "buy" | "sell" | "hold";
 
-export type BrokerProvider = "mock";
+export type BrokerProvider = "mock" | "kis";
 
 export type Quote = {
   symbol: string;
