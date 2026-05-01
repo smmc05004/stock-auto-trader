@@ -1,12 +1,22 @@
 import { z } from "zod";
 
+const optionalString = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().optional(),
+);
+
+const optionalUrl = z.preprocess(
+  (value) => (value === "" ? undefined : value),
+  z.string().url().optional(),
+);
+
 const envSchema = z.object({
   BROKER_PROVIDER: z.enum(["mock", "kis"]).default("mock"),
-  BROKER_APP_KEY: z.string().optional(),
-  BROKER_APP_SECRET: z.string().optional(),
+  BROKER_APP_KEY: optionalString,
+  BROKER_APP_SECRET: optionalString,
   BROKER_ACCOUNT_NO: z.string().default("PAPER-ACCOUNT"),
   KIS_ACCOUNT_PRODUCT_CODE: z.string().default("01"),
-  KIS_BASE_URL: z.string().url().optional(),
+  KIS_BASE_URL: optionalUrl,
   TRADING_MODE: z.enum(["paper", "live"]).default("paper"),
   TRADING_MARKET: z.enum(["KR", "US"]).default("KR"),
   TRADING_BASE_CURRENCY: z.string().default("KRW"),

@@ -9,6 +9,9 @@
 - [x] `BrokerClient` 인터페이스를 기준으로 실제 브로커 어댑터를 추가한다.
 - [ ] 계좌 요약, 보유 종목, 현재가 조회, 주문 접수 기능을 paper 모드에서 먼저 검증한다.
 - API 장애, 인증 만료, 요청 제한 초과, 네트워크 실패에 대한 오류 처리를 추가한다.
+- [x] KIS 현재가 조회를 `BrokerClient.getQuote`에 연결한다.
+- [x] KIS 잔고 조회를 `BrokerClient.getAccountSummary`에 연결한다.
+- [ ] KIS 잔고 원본 응답 기준으로 예수금/평가금액 필드 매핑을 검증한다.
 
 완료 기준:
 

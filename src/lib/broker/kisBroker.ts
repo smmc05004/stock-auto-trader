@@ -28,10 +28,41 @@ type KisQuoteOutput = {
   prdy_ctrt?: string;
 };
 
-let cachedToken: {
+type KisBalancePositionOutput = {
+  pdno?: string;
+  prdt_name?: string;
+  hldg_qty?: string;
+  pchs_avg_pric?: string;
+  prpr?: string;
+};
+
+type KisBalanceSummaryOutput = {
+  dnca_tot_amt?: string;
+  tot_evlu_amt?: string;
+  scts_evlu_amt?: string;
+};
+
+type KisBalanceResponse = Omit<KisApiResponse<never>, "output"> & {
+  output1?: KisBalancePositionOutput[];
+  output2?: KisBalanceSummaryOutput[];
+  ctx_area_fk100?: string;
+  ctx_area_nk100?: string;
+};
+
+type KisTokenCache = {
   accessToken: string;
   expiresAt: number;
-} | null = null;
+} | null;
+
+const tokenCacheKey = "__stockAutoTraderKisTokenCache";
+
+function getTokenCache() {
+  return (globalThis as typeof globalThis & Record<string, KisTokenCache>)[tokenCacheKey] ?? null;
+}
+
+function setTokenCache(cache: Exclude<KisTokenCache, null>) {
+  (globalThis as typeof globalThis & Record<string, KisTokenCache>)[tokenCacheKey] = cache;
+}
 
 function getKisBaseUrl() {
   if (env.KIS_BASE_URL) {
@@ -49,6 +80,19 @@ function assertKisCredentials() {
   }
 }
 
+function getAccountParts() {
+  const accountNo = env.BROKER_ACCOUNT_NO.replaceAll("-", "").trim();
+
+  if (!/^\d{8}$/.test(accountNo)) {
+    throw new Error("BROKER_ACCOUNT_NO must be the 8-digit KIS account number.");
+  }
+
+  return {
+    accountNo,
+    productCode: env.KIS_ACCOUNT_PRODUCT_CODE,
+  };
+}
+
 function parseNumber(value: string | undefined) {
   if (!value) {
     return 0;
@@ -59,17 +103,23 @@ function parseNumber(value: string | undefined) {
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
-  const data = (await response.json().catch(() => null)) as T | null;
+  const data = (await response.json().catch(() => null)) as
+    | (T & { error_description?: string; msg1?: string; msg_cd?: string })
+    | null;
 
   if (!response.ok) {
-    throw new Error(`KIS request failed with HTTP ${response.status}.`);
+    throw new Error(
+      data?.error_description ??
+        data?.msg1 ??
+        `KIS request failed with HTTP ${response.status}.`,
+    );
   }
 
   if (!data) {
     throw new Error("KIS returned an empty response.");
   }
 
-  return data;
+  return data as T;
 }
 
 export class KisBrokerClient implements BrokerClient {
@@ -96,12 +146,70 @@ export class KisBrokerClient implements BrokerClient {
   }
 
   async getAccountSummary(): Promise<AccountSummary> {
+    const accessToken = await this.getAccessToken();
+    const { accountNo, productCode } = getAccountParts();
+    const positions: KisBalancePositionOutput[] = [];
+    let summary: KisBalanceSummaryOutput | undefined;
+    let nextContextAreaFk100 = "";
+    let nextContextAreaNk100 = "";
+    let trCont: string | undefined;
+
+    do {
+      const url = new URL("/uapi/domestic-stock/v1/trading/inquire-balance", this.baseUrl);
+      url.searchParams.set("CANO", accountNo);
+      url.searchParams.set("ACNT_PRDT_CD", productCode);
+      url.searchParams.set("AFHR_FLPR_YN", "N");
+      url.searchParams.set("OFL_YN", "");
+      url.searchParams.set("INQR_DVSN", "01");
+      url.searchParams.set("UNPR_DVSN", "01");
+      url.searchParams.set("FUND_STTL_ICLD_YN", "N");
+      url.searchParams.set("FNCG_AMT_AUTO_RDPT_YN", "N");
+      url.searchParams.set("PRCS_DVSN", "00");
+      url.searchParams.set("CTX_AREA_FK100", nextContextAreaFk100);
+      url.searchParams.set("CTX_AREA_NK100", nextContextAreaNk100);
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json; charset=utf-8",
+          authorization: `Bearer ${accessToken}`,
+          appkey: env.BROKER_APP_KEY ?? "",
+          appsecret: env.BROKER_APP_SECRET ?? "",
+          tr_id: env.TRADING_MODE === "live" ? "TTTC8434R" : "VTTC8434R",
+          ...(trCont ? { tr_cont: trCont } : {}),
+          custtype: "P",
+        },
+        cache: "no-store",
+      });
+
+      const data = await readJsonResponse<KisBalanceResponse>(response);
+
+      if (data.rt_cd && data.rt_cd !== "0") {
+        throw new Error(data.msg1 ?? `KIS balance request failed (${data.msg_cd ?? "unknown"}).`);
+      }
+
+      positions.push(...(data.output1 ?? []));
+      summary = data.output2?.[0] ?? summary;
+      nextContextAreaFk100 = data.ctx_area_fk100 ?? "";
+      nextContextAreaNk100 = data.ctx_area_nk100 ?? "";
+      trCont = response.headers.get("tr_cont") === "F" ? "N" : undefined;
+    } while (trCont);
+
     return {
-      accountNo: env.BROKER_ACCOUNT_NO,
-      cash: 0,
+      accountNo,
+      cash: parseNumber(summary?.dnca_tot_amt),
       currency: env.TRADING_BASE_CURRENCY,
-      totalMarketValue: 0,
-      positions: [],
+      totalMarketValue: parseNumber(summary?.tot_evlu_amt ?? summary?.scts_evlu_amt),
+      positions: positions
+        .filter((position) => parseNumber(position.hldg_qty) > 0)
+        .map((position) => ({
+          symbol: position.pdno ?? "",
+          name: position.prdt_name ?? position.pdno ?? "",
+          quantity: parseNumber(position.hldg_qty),
+          averagePrice: parseNumber(position.pchs_avg_pric),
+          currentPrice: parseNumber(position.prpr),
+          currency: env.TRADING_BASE_CURRENCY,
+        })),
     };
   }
 
@@ -159,6 +267,7 @@ export class KisBrokerClient implements BrokerClient {
 
   private async getAccessToken() {
     assertKisCredentials();
+    const cachedToken = getTokenCache();
 
     if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
       return cachedToken.accessToken;
@@ -185,11 +294,13 @@ export class KisBrokerClient implements BrokerClient {
       );
     }
 
-    cachedToken = {
+    const nextCache = {
       accessToken: data.access_token,
       expiresAt: Date.now() + Math.max((data.expires_in ?? 86_400) - 60, 60) * 1000,
     };
 
-    return cachedToken.accessToken;
+    setTokenCache(nextCache);
+
+    return nextCache.accessToken;
   }
 }
