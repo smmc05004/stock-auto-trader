@@ -2,6 +2,7 @@ import type { BrokerClient } from "@/lib/broker/broker";
 import { recordOrderAttempt } from "@/lib/engine/orderHistory";
 import { validateOrder } from "@/lib/engine/orderSafety";
 import type { TradingStrategy } from "@/lib/strategy/strategy";
+import { appendAuditLog } from "@/lib/storage/auditLog";
 import type { TradingDecision } from "@/lib/types/trading";
 
 type RunStrategyInput = {
@@ -10,6 +11,10 @@ type RunStrategyInput = {
   symbol: string;
   executeOrder?: boolean;
 };
+
+async function appendAuditLogSafely(event: Parameters<typeof appendAuditLog>[0]) {
+  await appendAuditLog(event).catch(() => undefined);
+}
 
 export async function runStrategy({
   broker,
@@ -34,6 +39,13 @@ export async function runStrategy({
     cashRatio,
   });
 
+  await appendAuditLogSafely({
+    type: "strategy_evaluated",
+    strategyName: strategy.name,
+    symbol,
+    signal,
+  });
+
   if (!executeOrder || !signal.suggestedOrder || signal.action === "hold") {
     return {
       strategyName: strategy.name,
@@ -48,6 +60,14 @@ export async function runStrategy({
   });
 
   if (!safetyCheck.allowed) {
+    await appendAuditLogSafely({
+      type: "order_blocked",
+      strategyName: strategy.name,
+      symbol,
+      order: signal.suggestedOrder,
+      safetyCheck,
+    });
+
     return {
       strategyName: strategy.name,
       signal,
@@ -57,6 +77,14 @@ export async function runStrategy({
 
   const order = await broker.placeOrder(signal.suggestedOrder);
   recordOrderAttempt(signal.suggestedOrder);
+  await appendAuditLogSafely({
+    type: "order_requested",
+    strategyName: strategy.name,
+    symbol,
+    order: signal.suggestedOrder,
+    safetyCheck,
+    result: order,
+  });
 
   return {
     strategyName: strategy.name,
