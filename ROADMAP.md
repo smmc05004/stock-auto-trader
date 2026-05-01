@@ -11,7 +11,9 @@
 - API 장애, 인증 만료, 요청 제한 초과, 네트워크 실패에 대한 오류 처리를 추가한다.
 - [x] KIS 현재가 조회를 `BrokerClient.getQuote`에 연결한다.
 - [x] KIS 잔고 조회를 `BrokerClient.getAccountSummary`에 연결한다.
-- [ ] KIS 잔고 원본 응답 기준으로 예수금/평가금액 필드 매핑을 검증한다.
+- [x] KIS 잔고 원본 응답 기준으로 예수금/평가금액 필드 매핑을 검증한다.
+- [x] KIS 현금 주문 API를 `BrokerClient.placeOrder`에 연결한다.
+- [ ] KIS 주문은 paper 모드에서 소액으로 먼저 검증한다.
 
 완료 기준:
 

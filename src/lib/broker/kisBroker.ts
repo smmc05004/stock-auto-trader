@@ -1,3 +1,5 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { env } from "@/lib/config/env";
 import type { BrokerClient, BrokerStatus } from "@/lib/broker/broker";
 import type {
@@ -49,12 +51,26 @@ type KisBalanceResponse = Omit<KisApiResponse<never>, "output"> & {
   ctx_area_nk100?: string;
 };
 
+type KisHashResponse = {
+  HASH?: string;
+  hash?: string;
+};
+
+type KisOrderOutput = {
+  KRX_FWDG_ORD_ORGNO?: string;
+  ODNO?: string;
+  ORD_TMD?: string;
+};
+
 type KisTokenCache = {
   accessToken: string;
   expiresAt: number;
+  appKey: string;
+  mode: string;
 } | null;
 
 const tokenCacheKey = "__stockAutoTraderKisTokenCache";
+const tokenCacheFile = path.join(process.cwd(), ".next", "cache", "kis-token.json");
 
 function getTokenCache() {
   return (globalThis as typeof globalThis & Record<string, KisTokenCache>)[tokenCacheKey] ?? null;
@@ -62,6 +78,30 @@ function getTokenCache() {
 
 function setTokenCache(cache: Exclude<KisTokenCache, null>) {
   (globalThis as typeof globalThis & Record<string, KisTokenCache>)[tokenCacheKey] = cache;
+}
+
+function isUsableTokenCache(cache: KisTokenCache): cache is Exclude<KisTokenCache, null> {
+  return Boolean(
+    cache &&
+      cache.appKey === env.BROKER_APP_KEY &&
+      cache.mode === env.TRADING_MODE &&
+      cache.expiresAt > Date.now() + 60_000,
+  );
+}
+
+async function readTokenCacheFile() {
+  try {
+    const raw = await readFile(tokenCacheFile, "utf8");
+    const cache = JSON.parse(raw) as KisTokenCache;
+    return isUsableTokenCache(cache) ? cache : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeTokenCacheFile(cache: Exclude<KisTokenCache, null>) {
+  await mkdir(path.dirname(tokenCacheFile), { recursive: true });
+  await writeFile(tokenCacheFile, JSON.stringify(cache), { mode: 0o600 });
 }
 
 function getKisBaseUrl() {
@@ -100,6 +140,18 @@ function parseNumber(value: string | undefined) {
 
   const parsed = Number(value.replaceAll(",", ""));
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function getOrderDivision(order: OrderRequest) {
+  return order.type === "market" ? "01" : "00";
+}
+
+function getOrderUnitPrice(order: OrderRequest) {
+  if (order.type === "market") {
+    return "0";
+  }
+
+  return String(order.limitPrice ?? 0);
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -256,21 +308,104 @@ export class KisBrokerClient implements BrokerClient {
   }
 
   async placeOrder(order: OrderRequest): Promise<OrderResult> {
+    if (env.TRADING_MODE === "live" && !env.ALLOW_LIVE_TRADING) {
+      return {
+        orderId: `kis-blocked-${Date.now()}`,
+        accepted: false,
+        mode: env.TRADING_MODE,
+        message: "Live KIS order placement is disabled. Set ALLOW_LIVE_TRADING=true to enable it.",
+        requestedAt: new Date().toISOString(),
+      };
+    }
+
+    const accessToken = await this.getAccessToken();
+    const { accountNo, productCode } = getAccountParts();
+    const body = {
+      CANO: accountNo,
+      ACNT_PRDT_CD: productCode,
+      PDNO: order.symbol,
+      ORD_DVSN: getOrderDivision(order),
+      ORD_QTY: String(order.quantity),
+      ORD_UNPR: getOrderUnitPrice(order),
+      CTAC_TLNO: "",
+      SLL_TYPE: order.side === "sell" ? "01" : undefined,
+      ALGO_NO: "",
+    };
+    const hashKey = await this.createHashKey(body);
+    const response = await fetch(new URL("/uapi/domestic-stock/v1/trading/order-cash", this.baseUrl), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        authorization: `Bearer ${accessToken}`,
+        appkey: env.BROKER_APP_KEY ?? "",
+        appsecret: env.BROKER_APP_SECRET ?? "",
+        tr_id: this.getOrderTrId(order),
+        custtype: "P",
+        hashkey: hashKey,
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+
+    const data = await readJsonResponse<KisApiResponse<KisOrderOutput>>(response);
+    const accepted = data.rt_cd === "0";
+    const orderNo = data.output?.ODNO;
+    const forwardingOrgNo = data.output?.KRX_FWDG_ORD_ORGNO;
+
     return {
-      orderId: `kis-disabled-${Date.now()}`,
-      accepted: false,
+      orderId: orderNo ? [forwardingOrgNo, orderNo].filter(Boolean).join("-") : `kis-${Date.now()}`,
+      accepted,
       mode: env.TRADING_MODE,
-      message: `KIS order placement is not implemented yet. ${order.side.toUpperCase()} ${order.quantity} ${order.symbol} was not sent.`,
+      message: data.msg1 ?? (accepted ? "KIS order accepted." : "KIS order rejected."),
       requestedAt: new Date().toISOString(),
     };
+  }
+
+  private getOrderTrId(order: OrderRequest) {
+    if (env.TRADING_MODE === "live") {
+      return order.side === "buy" ? "TTTC0802U" : "TTTC0801U";
+    }
+
+    return order.side === "buy" ? "VTTC0802U" : "VTTC0801U";
+  }
+
+  private async createHashKey(body: Record<string, string | undefined>) {
+    assertKisCredentials();
+
+    const response = await fetch(new URL("/uapi/hashkey", this.baseUrl), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json; charset=utf-8",
+        appkey: env.BROKER_APP_KEY ?? "",
+        appsecret: env.BROKER_APP_SECRET ?? "",
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+
+    const data = await readJsonResponse<KisHashResponse>(response);
+    const hashKey = data.HASH ?? data.hash;
+
+    if (!hashKey) {
+      throw new Error("KIS hashkey response did not include HASH.");
+    }
+
+    return hashKey;
   }
 
   private async getAccessToken() {
     assertKisCredentials();
     const cachedToken = getTokenCache();
 
-    if (cachedToken && cachedToken.expiresAt > Date.now() + 60_000) {
+    if (isUsableTokenCache(cachedToken)) {
       return cachedToken.accessToken;
+    }
+
+    const storedToken = await readTokenCacheFile();
+
+    if (storedToken) {
+      setTokenCache(storedToken);
+      return storedToken.accessToken;
     }
 
     const response = await fetch(new URL("/oauth2/tokenP", this.baseUrl), {
@@ -297,9 +432,12 @@ export class KisBrokerClient implements BrokerClient {
     const nextCache = {
       accessToken: data.access_token,
       expiresAt: Date.now() + Math.max((data.expires_in ?? 86_400) - 60, 60) * 1000,
+      appKey: env.BROKER_APP_KEY ?? "",
+      mode: env.TRADING_MODE,
     };
 
     setTokenCache(nextCache);
+    await writeTokenCacheFile(nextCache);
 
     return nextCache.accessToken;
   }
