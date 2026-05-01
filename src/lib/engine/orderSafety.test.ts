@@ -28,11 +28,15 @@ const baseQuote: Quote = {
   timestamp: "2026-05-01T00:00:00.000Z",
 };
 
+const marketOpenDate = new Date("2026-05-01T01:00:00.000Z");
+const marketClosedDate = new Date("2026-05-01T08:00:00.000Z");
+
 async function validateWithEnv(
   env: Record<string, unknown>,
   order: OrderRequest,
   account: AccountSummary = baseAccount,
   quote: Quote = baseQuote,
+  now: Date = marketOpenDate,
 ) {
   vi.resetModules();
   vi.doMock("@/lib/config/env", () => ({
@@ -41,6 +45,7 @@ async function validateWithEnv(
       ALLOW_LIVE_TRADING: false,
       MAX_ORDER_VALUE: 1_000_000,
       MAX_ORDER_QUANTITY: 10,
+      DUPLICATE_ORDER_WINDOW_MS: 60_000,
       ...env,
     },
   }));
@@ -51,6 +56,7 @@ async function validateWithEnv(
     account,
     order,
     quote,
+    now,
   });
 }
 
@@ -136,5 +142,60 @@ describe("validateOrder", () => {
 
     expect(result.allowed).toBe(false);
     expect(result.reasons).toContain("Limit orders require a positive limitPrice.");
+  });
+
+  it("blocks orders outside Korean regular market hours", async () => {
+    const result = await validateWithEnv(
+      {},
+      {
+        symbol: "005930",
+        side: "buy",
+        type: "market",
+        quantity: 1,
+      },
+      baseAccount,
+      baseQuote,
+      marketClosedDate,
+    );
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasons).toContain(
+      "Korean regular market is open from 09:00 to 15:30 Asia/Seoul.",
+    );
+  });
+
+  it("blocks recent duplicate orders", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/config/env", () => ({
+      env: {
+        TRADING_MODE: "paper",
+        ALLOW_LIVE_TRADING: false,
+        MAX_ORDER_VALUE: 1_000_000,
+        MAX_ORDER_QUANTITY: 10,
+        DUPLICATE_ORDER_WINDOW_MS: 60_000,
+      },
+    }));
+
+    const { recordOrderAttempt, clearOrderHistory } = await import("@/lib/engine/orderHistory");
+    const { validateOrder } = await import("@/lib/engine/orderSafety");
+    const order: OrderRequest = {
+      symbol: "005930",
+      side: "buy",
+      type: "market",
+      quantity: 1,
+    };
+
+    clearOrderHistory();
+    recordOrderAttempt(order, marketOpenDate.getTime());
+
+    const result = validateOrder({
+      account: baseAccount,
+      order,
+      quote: baseQuote,
+      now: marketOpenDate,
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasons).toContain("Duplicate order blocked within 60000ms for 005930.");
   });
 });

@@ -1,4 +1,5 @@
 import type { BrokerClient } from "@/lib/broker/broker";
+import { recordOrderAttempt } from "@/lib/engine/orderHistory";
 import { validateOrder } from "@/lib/engine/orderSafety";
 import type { TradingStrategy } from "@/lib/strategy/strategy";
 import type { TradingDecision } from "@/lib/types/trading";
@@ -45,6 +46,7 @@ export async function runStrategy({
   }
 
   const order = await broker.placeOrder(signal.suggestedOrder);
+  recordOrderAttempt(signal.suggestedOrder);
 
   return {
     strategyName: strategy.name,
