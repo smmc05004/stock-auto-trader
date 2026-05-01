@@ -1,4 +1,5 @@
 import { createBrokerClient } from "@/lib/broker";
+import { BacktestPanel } from "@/components/BacktestPanel";
 import { SimulationForm } from "@/components/SimulationForm";
 
 function formatCurrency(value: number, currency: string) {
@@ -94,6 +95,18 @@ export default async function Home() {
             </div>
             <div className="panel-body">
               <SimulationForm />
+            </div>
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="panel">
+            <div className="panel-header">
+              <h2>샘플 백테스트</h2>
+              <span>005930</span>
+            </div>
+            <div className="panel-body">
+              <BacktestPanel />
             </div>
           </div>
         </section>

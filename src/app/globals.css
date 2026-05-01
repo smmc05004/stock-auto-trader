@@ -98,6 +98,10 @@ button {
   gap: 16px;
 }
 
+.section {
+  margin-top: 16px;
+}
+
 .panel {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -165,6 +169,29 @@ button {
 }
 
 .table tr:last-child td {
+  border-bottom: 0;
+}
+
+.compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.compact-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.compact-table tr:last-child td {
   border-bottom: 0;
 }
 
