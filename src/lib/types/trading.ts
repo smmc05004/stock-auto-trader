@@ -75,3 +75,13 @@ export type TradingDecision = {
   safetyCheck?: OrderSafetyCheck;
   order?: OrderResult;
 };
+
+export type OrderHistoryItem = {
+  symbol: string;
+  side: OrderSide;
+  type: OrderType;
+  quantity: number;
+  requestedAt: string;
+  orderId?: string;
+  accepted?: boolean;
+};

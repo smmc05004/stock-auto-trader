@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createBrokerClient } from "@/lib/broker";
 import { runStrategy } from "@/lib/engine/tradingEngine";
-import { sampleMomentumStrategy } from "@/lib/strategy/sampleStrategy";
+import { loadMomentumStrategyConfig } from "@/lib/strategy/config";
+import { createSampleMomentumStrategy } from "@/lib/strategy/samples/momentumStrategy";
 
 const requestSchema = z.object({
   symbol: z.string().min(1).default("005930"),
@@ -14,10 +15,11 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const input = requestSchema.parse(body);
     const broker = createBrokerClient();
+    const strategy = createSampleMomentumStrategy(loadMomentumStrategyConfig());
 
     const decision = await runStrategy({
       broker,
-      strategy: sampleMomentumStrategy,
+      strategy,
       symbol: input.symbol,
       executeOrder: input.executeOrder,
     });

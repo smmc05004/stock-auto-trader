@@ -22,7 +22,17 @@ export async function runStrategy({
     broker.getQuote(symbol),
   ]);
 
-  const signal = await strategy.evaluate({ account, quote });
+  const totalAssetValue = account.cash + account.totalMarketValue;
+  const cashRatio = totalAssetValue > 0 ? account.cash / totalAssetValue : 0;
+
+  const signal = await strategy.evaluate({
+    account,
+    quote,
+    quoteHistory: [quote],
+    positions: account.positions,
+    orderHistory: [],
+    cashRatio,
+  });
 
   if (!executeOrder || !signal.suggestedOrder || signal.action === "hold") {
     return {
