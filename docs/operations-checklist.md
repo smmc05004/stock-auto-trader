@@ -48,6 +48,7 @@ ALLOW_LIVE_TRADING=false
 
 ```env
 KIS_BASE_URL=
+KIS_TOKEN_CACHE_PATH=
 AUDIT_LOG_PATH=
 STRATEGY_BUY_CHANGE_RATE_THRESHOLD=1
 STRATEGY_SELL_CHANGE_RATE_THRESHOLD=-1
@@ -56,6 +57,8 @@ STRATEGY_CONFIDENCE=0.35
 ```
 
 `KIS_BASE_URL`은 기본 KIS paper/live URL 대신 명시 URL을 사용할 때만 설정한다. 운영에서는 특별한 네트워크 테스트 목적이 없으면 비워 둔다.
+
+`KIS_TOKEN_CACHE_PATH`는 KIS 접근 토큰 파일 캐시 위치를 바꿀 때만 설정한다. Vercel에서는 기본값으로 `/tmp/kis-token.json`을 사용한다.
 
 `AUDIT_LOG_PATH`는 파일 기반 감사 로그 위치를 바꿀 때만 설정한다. Vercel처럼 영속 파일 저장을 보장하지 않는 환경에서는 장기 보존 용도로 사용하지 않는다.
 

@@ -70,7 +70,15 @@ type KisTokenCache = {
 } | null;
 
 const tokenCacheKey = "__stockAutoTraderKisTokenCache";
-const tokenCacheFile = path.join(process.cwd(), ".next", "cache", "kis-token.json");
+
+function getTokenCacheFile() {
+  if (process.env.KIS_TOKEN_CACHE_PATH) {
+    return process.env.KIS_TOKEN_CACHE_PATH;
+  }
+
+  const cacheRoot = process.env.VERCEL ? "/tmp" : path.join(process.cwd(), ".next", "cache");
+  return path.join(cacheRoot, "kis-token.json");
+}
 
 function getTokenCache() {
   return (globalThis as typeof globalThis & Record<string, KisTokenCache>)[tokenCacheKey] ?? null;
@@ -91,7 +99,7 @@ function isUsableTokenCache(cache: KisTokenCache): cache is Exclude<KisTokenCach
 
 async function readTokenCacheFile() {
   try {
-    const raw = await readFile(tokenCacheFile, "utf8");
+    const raw = await readFile(getTokenCacheFile(), "utf8");
     const cache = JSON.parse(raw) as KisTokenCache;
     return isUsableTokenCache(cache) ? cache : null;
   } catch {
@@ -100,6 +108,7 @@ async function readTokenCacheFile() {
 }
 
 async function writeTokenCacheFile(cache: Exclude<KisTokenCache, null>) {
+  const tokenCacheFile = getTokenCacheFile();
   await mkdir(path.dirname(tokenCacheFile), { recursive: true });
   await writeFile(tokenCacheFile, JSON.stringify(cache), { mode: 0o600 });
 }
