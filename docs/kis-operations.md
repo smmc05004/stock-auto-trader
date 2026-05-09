@@ -22,6 +22,8 @@ ORDER_EXECUTION_TOKEN=
 ALLOW_LIVE_TRADING=false
 ```
 
+전체 환경 변수 관리 기준과 live 전환 체크리스트는 [`docs/operations-checklist.md`](./operations-checklist.md)를 따른다.
+
 `TRADING_MODE=paper`는 모의투자 URL을 사용한다. `TRADING_MODE=live`는 실전투자 URL을 사용한다.
 
 `ALLOW_LIVE_TRADING=false`가 기본값이다. live 모드에서도 이 값이 `true`가 아니면 주문 안전장치와 KIS 브로커 레벨에서 주문을 차단한다.

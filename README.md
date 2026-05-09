@@ -25,6 +25,8 @@ src/lib/types           공통 도메인 타입
 
 ## 로드맵
 
+운영 환경 변수와 live 전환 절차는 [`docs/operations-checklist.md`](./docs/operations-checklist.md)에 정리합니다. KIS API 세부 운영 기준은 [`docs/kis-operations.md`](./docs/kis-operations.md)를 참고합니다.
+
 ### 완료
 
 1. `mock` 브로커와 KIS 브로커 어댑터 기본 구현
