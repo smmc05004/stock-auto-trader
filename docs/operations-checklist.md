@@ -30,10 +30,6 @@ live 환경은 paper와 별도 Vercel project 또는 최소한 별도 environmen
 
 ```env
 BROKER_PROVIDER=kis
-BROKER_APP_KEY=
-BROKER_APP_SECRET=
-BROKER_ACCOUNT_NO=
-KIS_ACCOUNT_PRODUCT_CODE=01
 TRADING_MODE=paper
 TRADING_MARKET=KR
 TRADING_BASE_CURRENCY=KRW
@@ -43,6 +39,25 @@ DUPLICATE_ORDER_WINDOW_MS=60000
 ORDER_EXECUTION_TOKEN=
 ALLOW_LIVE_TRADING=false
 ```
+
+### KIS 환경별 변수
+
+모의투자와 실전투자 값은 분리해서 관리한다.
+
+```env
+KIS_PAPER_APP_KEY=
+KIS_PAPER_APP_SECRET=
+KIS_PAPER_ACCOUNT_NO=
+KIS_PAPER_ACCOUNT_PRODUCT_CODE=01
+KIS_LIVE_APP_KEY=
+KIS_LIVE_APP_SECRET=
+KIS_LIVE_ACCOUNT_NO=
+KIS_LIVE_ACCOUNT_PRODUCT_CODE=01
+```
+
+`TRADING_MODE=paper`이면 `KIS_PAPER_*` 값을 사용하고, `TRADING_MODE=live`이면 `KIS_LIVE_*` 값을 사용한다.
+
+기존 호환 변수인 `BROKER_APP_KEY`, `BROKER_APP_SECRET`, `BROKER_ACCOUNT_NO`, `KIS_ACCOUNT_PRODUCT_CODE`도 fallback으로 지원하지만, 운영 환경에서는 새 환경별 변수를 우선 사용한다.
 
 ### 선택 변수
 
@@ -70,6 +85,7 @@ STRATEGY_CONFIDENCE=0.35
 - `TRADING_MODE=paper`
 - `ALLOW_LIVE_TRADING=false`
 - `BROKER_PROVIDER=kis`
+- `KIS_PAPER_APP_KEY`, `KIS_PAPER_APP_SECRET`, `KIS_PAPER_ACCOUNT_NO`는 모의투자용 값
 - `ORDER_EXECUTION_TOKEN`은 충분히 긴 임의 문자열
 - `MAX_ORDER_VALUE`와 `MAX_ORDER_QUANTITY`는 소액 검증용 한도
 - `/api/health`가 200을 반환
@@ -86,7 +102,7 @@ live 전환은 별도 커밋이나 배포 변경으로 수행하고, 같은 배�
 - paper 운영에서 계좌 조회, 현재가 조회, 주문 접수 결과 대조 완료
 - `TRADING_MODE=live`
 - `ALLOW_LIVE_TRADING=true`
-- live 전용 `BROKER_APP_KEY`, `BROKER_APP_SECRET`, `BROKER_ACCOUNT_NO` 확인
+- live 전용 `KIS_LIVE_APP_KEY`, `KIS_LIVE_APP_SECRET`, `KIS_LIVE_ACCOUNT_NO` 확인
 - `ORDER_EXECUTION_TOKEN` 교체
 - `MAX_ORDER_VALUE`와 `MAX_ORDER_QUANTITY`를 첫 live 주문용 최소 한도로 축소
 - 장 운영 시간, 공휴일, 단축장 여부 수동 확인

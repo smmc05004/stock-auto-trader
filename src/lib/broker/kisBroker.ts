@@ -71,6 +71,24 @@ type KisTokenCache = {
 
 const tokenCacheKey = "__stockAutoTraderKisTokenCache";
 
+function getKisCredentials() {
+  if (env.TRADING_MODE === "live") {
+    return {
+      appKey: env.KIS_LIVE_APP_KEY ?? env.BROKER_APP_KEY,
+      appSecret: env.KIS_LIVE_APP_SECRET ?? env.BROKER_APP_SECRET,
+      accountNo: env.KIS_LIVE_ACCOUNT_NO ?? env.BROKER_ACCOUNT_NO,
+      productCode: env.KIS_LIVE_ACCOUNT_PRODUCT_CODE ?? env.KIS_ACCOUNT_PRODUCT_CODE,
+    };
+  }
+
+  return {
+    appKey: env.KIS_PAPER_APP_KEY ?? env.BROKER_APP_KEY,
+    appSecret: env.KIS_PAPER_APP_SECRET ?? env.BROKER_APP_SECRET,
+    accountNo: env.KIS_PAPER_ACCOUNT_NO ?? env.BROKER_ACCOUNT_NO,
+    productCode: env.KIS_PAPER_ACCOUNT_PRODUCT_CODE ?? env.KIS_ACCOUNT_PRODUCT_CODE,
+  };
+}
+
 function getTokenCacheFile() {
   if (process.env.KIS_TOKEN_CACHE_PATH) {
     return process.env.KIS_TOKEN_CACHE_PATH;
@@ -89,9 +107,11 @@ function setTokenCache(cache: Exclude<KisTokenCache, null>) {
 }
 
 function isUsableTokenCache(cache: KisTokenCache): cache is Exclude<KisTokenCache, null> {
+  const { appKey } = getKisCredentials();
+
   return Boolean(
     cache &&
-      cache.appKey === env.BROKER_APP_KEY &&
+      cache.appKey === appKey &&
       cache.mode === env.TRADING_MODE &&
       cache.expiresAt > Date.now() + 60_000,
   );
@@ -124,21 +144,24 @@ function getKisBaseUrl() {
 }
 
 function assertKisCredentials() {
-  if (!env.BROKER_APP_KEY || !env.BROKER_APP_SECRET) {
-    throw new Error("KIS app key and app secret are required.");
+  const { appKey, appSecret } = getKisCredentials();
+
+  if (!appKey || !appSecret) {
+    throw new Error(`KIS ${env.TRADING_MODE} app key and app secret are required.`);
   }
 }
 
 function getAccountParts() {
-  const accountNo = env.BROKER_ACCOUNT_NO.replaceAll("-", "").trim();
+  const { accountNo: rawAccountNo, productCode } = getKisCredentials();
+  const accountNo = rawAccountNo.replaceAll("-", "").trim();
 
   if (!/^\d{8}$/.test(accountNo)) {
-    throw new Error("BROKER_ACCOUNT_NO must be the 8-digit KIS account number.");
+    throw new Error(`KIS ${env.TRADING_MODE} account number must be the 8-digit account number.`);
   }
 
   return {
     accountNo,
-    productCode: env.KIS_ACCOUNT_PRODUCT_CODE,
+    productCode,
   };
 }
 
@@ -216,6 +239,7 @@ export class KisBrokerClient implements BrokerClient {
     let trCont: string | undefined;
 
     do {
+      const { appKey, appSecret } = getKisCredentials();
       const url = new URL("/uapi/domestic-stock/v1/trading/inquire-balance", this.baseUrl);
       url.searchParams.set("CANO", accountNo);
       url.searchParams.set("ACNT_PRDT_CD", productCode);
@@ -234,8 +258,8 @@ export class KisBrokerClient implements BrokerClient {
         headers: {
           "Content-Type": "application/json; charset=utf-8",
           authorization: `Bearer ${accessToken}`,
-          appkey: env.BROKER_APP_KEY ?? "",
-          appsecret: env.BROKER_APP_SECRET ?? "",
+          appkey: appKey ?? "",
+          appsecret: appSecret ?? "",
           tr_id: env.TRADING_MODE === "live" ? "TTTC8434R" : "VTTC8434R",
           ...(trCont ? { tr_cont: trCont } : {}),
           custtype: "P",
@@ -276,6 +300,7 @@ export class KisBrokerClient implements BrokerClient {
 
   async getQuote(symbol: string): Promise<Quote> {
     const accessToken = await this.getAccessToken();
+    const { appKey, appSecret } = getKisCredentials();
     const url = new URL("/uapi/domestic-stock/v1/quotations/inquire-price", this.baseUrl);
     url.searchParams.set("FID_COND_MRKT_DIV_CODE", "J");
     url.searchParams.set("FID_INPUT_ISCD", symbol);
@@ -285,8 +310,8 @@ export class KisBrokerClient implements BrokerClient {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
         authorization: `Bearer ${accessToken}`,
-        appkey: env.BROKER_APP_KEY ?? "",
-        appsecret: env.BROKER_APP_SECRET ?? "",
+        appkey: appKey ?? "",
+        appsecret: appSecret ?? "",
         tr_id: "FHKST01010100",
         custtype: "P",
       },
@@ -328,6 +353,7 @@ export class KisBrokerClient implements BrokerClient {
     }
 
     const accessToken = await this.getAccessToken();
+    const { appKey, appSecret } = getKisCredentials();
     const { accountNo, productCode } = getAccountParts();
     const body = {
       CANO: accountNo,
@@ -346,8 +372,8 @@ export class KisBrokerClient implements BrokerClient {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
         authorization: `Bearer ${accessToken}`,
-        appkey: env.BROKER_APP_KEY ?? "",
-        appsecret: env.BROKER_APP_SECRET ?? "",
+        appkey: appKey ?? "",
+        appsecret: appSecret ?? "",
         tr_id: this.getOrderTrId(order),
         custtype: "P",
         hashkey: hashKey,
@@ -380,13 +406,14 @@ export class KisBrokerClient implements BrokerClient {
 
   private async createHashKey(body: Record<string, string | undefined>) {
     assertKisCredentials();
+    const { appKey, appSecret } = getKisCredentials();
 
     const response = await fetch(new URL("/uapi/hashkey", this.baseUrl), {
       method: "POST",
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        appkey: env.BROKER_APP_KEY ?? "",
-        appsecret: env.BROKER_APP_SECRET ?? "",
+        appkey: appKey ?? "",
+        appsecret: appSecret ?? "",
       },
       body: JSON.stringify(body),
       cache: "no-store",
@@ -404,6 +431,7 @@ export class KisBrokerClient implements BrokerClient {
 
   private async getAccessToken() {
     assertKisCredentials();
+    const { appKey, appSecret } = getKisCredentials();
     const cachedToken = getTokenCache();
 
     if (isUsableTokenCache(cachedToken)) {
@@ -424,8 +452,8 @@ export class KisBrokerClient implements BrokerClient {
       },
       body: JSON.stringify({
         grant_type: "client_credentials",
-        appkey: env.BROKER_APP_KEY,
-        appsecret: env.BROKER_APP_SECRET,
+        appkey: appKey,
+        appsecret: appSecret,
       }),
       cache: "no-store",
     });
@@ -441,7 +469,7 @@ export class KisBrokerClient implements BrokerClient {
     const nextCache = {
       accessToken: data.access_token,
       expiresAt: Date.now() + Math.max((data.expires_in ?? 86_400) - 60, 60) * 1000,
-      appKey: env.BROKER_APP_KEY ?? "",
+      appKey: appKey ?? "",
       mode: env.TRADING_MODE,
     };
 

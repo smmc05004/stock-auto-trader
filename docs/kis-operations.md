@@ -8,10 +8,14 @@
 
 ```env
 BROKER_PROVIDER=kis
-BROKER_APP_KEY=
-BROKER_APP_SECRET=
-BROKER_ACCOUNT_NO=
-KIS_ACCOUNT_PRODUCT_CODE=01
+KIS_PAPER_APP_KEY=
+KIS_PAPER_APP_SECRET=
+KIS_PAPER_ACCOUNT_NO=
+KIS_PAPER_ACCOUNT_PRODUCT_CODE=01
+KIS_LIVE_APP_KEY=
+KIS_LIVE_APP_SECRET=
+KIS_LIVE_ACCOUNT_NO=
+KIS_LIVE_ACCOUNT_PRODUCT_CODE=01
 TRADING_MODE=paper
 TRADING_MARKET=KR
 TRADING_BASE_CURRENCY=KRW
@@ -25,6 +29,8 @@ ALLOW_LIVE_TRADING=false
 전체 환경 변수 관리 기준과 live 전환 체크리스트는 [`docs/operations-checklist.md`](./operations-checklist.md)를 따른다.
 
 `TRADING_MODE=paper`는 모의투자 URL을 사용한다. `TRADING_MODE=live`는 실전투자 URL을 사용한다.
+
+`TRADING_MODE=paper`에서는 `KIS_PAPER_*` 값을 사용하고, `TRADING_MODE=live`에서는 `KIS_LIVE_*` 값을 사용한다. 기존 `BROKER_APP_KEY`, `BROKER_APP_SECRET`, `BROKER_ACCOUNT_NO`, `KIS_ACCOUNT_PRODUCT_CODE`는 fallback으로만 사용한다.
 
 `ALLOW_LIVE_TRADING=false`가 기본값이다. live 모드에서도 이 값이 `true`가 아니면 주문 안전장치와 KIS 브로커 레벨에서 주문을 차단한다.
 
