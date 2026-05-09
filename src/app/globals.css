@@ -92,14 +92,38 @@ button {
   background: var(--accent);
 }
 
-.grid {
+.dashboard {
   display: grid;
-  grid-template-columns: 1.2fr 0.8fr;
-  gap: 16px;
+  gap: 14px;
 }
 
-.section {
-  margin-top: 16px;
+.tabs {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.tab-button {
+  min-width: 92px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.tab-button:last-child {
+  border-right: 0;
+}
+
+.tab-button[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
 }
 
 .panel {
@@ -367,7 +391,7 @@ button {
 
 @media (max-width: 820px) {
   .topbar,
-  .grid {
+  .dashboard {
     grid-template-columns: 1fr;
   }
 

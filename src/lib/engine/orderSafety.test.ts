@@ -198,4 +198,26 @@ describe("validateOrder", () => {
     expect(result.allowed).toBe(false);
     expect(result.reasons).toContain("Duplicate order blocked within 60000ms for 005930.");
   });
+
+  it("reserves an order attempt before broker execution", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/config/env", () => ({
+      env: {
+        DUPLICATE_ORDER_WINDOW_MS: 60_000,
+      },
+    }));
+
+    const { clearOrderHistory, reserveOrderAttempt } = await import("@/lib/engine/orderHistory");
+    const order: OrderRequest = {
+      symbol: "005930",
+      side: "buy",
+      type: "market",
+      quantity: 1,
+    };
+
+    clearOrderHistory();
+
+    expect(reserveOrderAttempt(order, marketOpenDate.getTime())).toBe(true);
+    expect(reserveOrderAttempt(order, marketOpenDate.getTime())).toBe(false);
+  });
 });

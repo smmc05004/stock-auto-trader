@@ -23,6 +23,7 @@ const envSchema = z.object({
   MAX_ORDER_VALUE: z.coerce.number().positive().default(1_000_000),
   MAX_ORDER_QUANTITY: z.coerce.number().int().positive().default(10),
   DUPLICATE_ORDER_WINDOW_MS: z.coerce.number().int().nonnegative().default(60_000),
+  ORDER_EXECUTION_TOKEN: optionalString,
   ALLOW_LIVE_TRADING: z
     .enum(["true", "false"])
     .default("false")
@@ -42,5 +43,6 @@ export const env = envSchema.parse({
   MAX_ORDER_VALUE: process.env.MAX_ORDER_VALUE,
   MAX_ORDER_QUANTITY: process.env.MAX_ORDER_QUANTITY,
   DUPLICATE_ORDER_WINDOW_MS: process.env.DUPLICATE_ORDER_WINDOW_MS,
+  ORDER_EXECUTION_TOKEN: process.env.ORDER_EXECUTION_TOKEN,
   ALLOW_LIVE_TRADING: process.env.ALLOW_LIVE_TRADING,
 });

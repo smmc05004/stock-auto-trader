@@ -16,6 +16,7 @@ type SimulationResult =
 export function SimulationForm() {
   const [symbol, setSymbol] = useState("005930");
   const [executeOrder, setExecuteOrder] = useState(false);
+  const [executionToken, setExecutionToken] = useState("");
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -29,7 +30,7 @@ export function SimulationForm() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ symbol, executeOrder }),
+        body: JSON.stringify({ symbol, executeOrder, executionToken }),
       });
       const data = await response.json();
 
@@ -74,6 +75,18 @@ export function SimulationForm() {
           onChange={(event) => setExecuteOrder(event.target.checked)}
         />
       </label>
+      {executeOrder ? (
+        <div className="field">
+          <label htmlFor="execution-token">실행 토큰</label>
+          <input
+            id="execution-token"
+            value={executionToken}
+            onChange={(event) => setExecutionToken(event.target.value)}
+            placeholder="ORDER_EXECUTION_TOKEN"
+            type="password"
+          />
+        </div>
+      ) : null}
       <div className="actions">
         <button className="button" disabled={isLoading} type="submit">
           {isLoading ? "실행 중" : "전략 평가"}
@@ -84,6 +97,7 @@ export function SimulationForm() {
           onClick={() => {
             setSymbol("005930");
             setExecuteOrder(false);
+            setExecutionToken("");
             setResult(null);
           }}
         >

@@ -18,12 +18,15 @@ TRADING_BASE_CURRENCY=KRW
 MAX_ORDER_VALUE=1000000
 MAX_ORDER_QUANTITY=10
 DUPLICATE_ORDER_WINDOW_MS=60000
+ORDER_EXECUTION_TOKEN=
 ALLOW_LIVE_TRADING=false
 ```
 
 `TRADING_MODE=paper`는 모의투자 URL을 사용한다. `TRADING_MODE=live`는 실전투자 URL을 사용한다.
 
 `ALLOW_LIVE_TRADING=false`가 기본값이다. live 모드에서도 이 값이 `true`가 아니면 주문 안전장치와 KIS 브로커 레벨에서 주문을 차단한다.
+
+`ORDER_EXECUTION_TOKEN`은 `/api/trading/simulate`에서 `executeOrder=true` 요청을 허용하기 위한 서버 측 실행 토큰이다. 값이 비어 있거나 요청의 `executionToken`과 일치하지 않으면 주문 실행 요청은 403으로 차단된다.
 
 ## API 엔드포인트
 
@@ -72,6 +75,7 @@ KIS 접근 토큰은 발급 제한이 있다. 실제 테스트 중 `접근토큰
 실전 주문 전 기본 차단 조건:
 
 - `TRADING_MODE=live`이고 `ALLOW_LIVE_TRADING=true`가 아니면 차단
+- `executeOrder=true` 요청에 유효한 `ORDER_EXECUTION_TOKEN`이 없으면 차단
 - 종목 코드가 평가한 시세 종목과 다르면 차단
 - 주문 수량이 양의 정수가 아니면 차단
 - `MAX_ORDER_QUANTITY` 초과 시 차단
@@ -80,6 +84,7 @@ KIS 접근 토큰은 발급 제한이 있다. 실제 테스트 중 `접근토큰
 - 매수 주문금액이 현금보다 크면 차단
 - 매도 수량이 보유 수량보다 크면 차단
 - 동일 종목/방향/타입 주문이 짧은 시간 안에 반복되면 차단
+- 브로커 주문 요청 직전에 동일 주문을 예약 기록해 동시 요청 중복 실행을 차단
 - 국내 정규장 시간이 아니면 차단
 
 ## 장 운영 시간

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createBrokerClient } from "@/lib/broker";
+import { env } from "@/lib/config/env";
 import { runStrategy } from "@/lib/engine/tradingEngine";
 import { loadMomentumStrategyConfig } from "@/lib/strategy/config";
 import { createSampleMomentumStrategy } from "@/lib/strategy/samples/momentumStrategy";
@@ -8,12 +9,26 @@ import { createSampleMomentumStrategy } from "@/lib/strategy/samples/momentumStr
 const requestSchema = z.object({
   symbol: z.string().min(1).default("005930"),
   executeOrder: z.boolean().default(false),
+  executionToken: z.string().optional(),
 });
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const input = requestSchema.parse(body);
+
+    if (
+      input.executeOrder &&
+      (!env.ORDER_EXECUTION_TOKEN || input.executionToken !== env.ORDER_EXECUTION_TOKEN)
+    ) {
+      return NextResponse.json(
+        {
+          error: "Order execution is disabled or the execution token is invalid.",
+        },
+        { status: 403 },
+      );
+    }
+
     const broker = createBrokerClient();
     const strategy = createSampleMomentumStrategy(loadMomentumStrategyConfig());
 

@@ -48,6 +48,16 @@ export function recordOrderAttempt(order: OrderRequest, now = Date.now()) {
   history.splice(0, history.length, ...retained);
 }
 
+export function reserveOrderAttempt(order: OrderRequest, now = Date.now()) {
+  if (findRecentDuplicateOrder(order, now)) {
+    return false;
+  }
+
+  recordOrderAttempt(order, now);
+
+  return true;
+}
+
 export function clearOrderHistory() {
   getOrderHistory().splice(0);
 }

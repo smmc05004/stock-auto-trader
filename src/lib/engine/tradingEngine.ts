@@ -1,5 +1,5 @@
 import type { BrokerClient } from "@/lib/broker/broker";
-import { recordOrderAttempt } from "@/lib/engine/orderHistory";
+import { reserveOrderAttempt } from "@/lib/engine/orderHistory";
 import { validateOrder } from "@/lib/engine/orderSafety";
 import type { TradingStrategy } from "@/lib/strategy/strategy";
 import { appendAuditLog } from "@/lib/storage/auditLog";
@@ -75,8 +75,34 @@ export async function runStrategy({
     };
   }
 
+  const orderReserved = reserveOrderAttempt(signal.suggestedOrder);
+
+  if (!orderReserved) {
+    const duplicateSafetyCheck = {
+      ...safetyCheck,
+      allowed: false,
+      reasons: [
+        ...safetyCheck.reasons,
+        "Duplicate order blocked because another matching order is already being processed.",
+      ],
+    };
+
+    await appendAuditLogSafely({
+      type: "order_blocked",
+      strategyName: strategy.name,
+      symbol,
+      order: signal.suggestedOrder,
+      safetyCheck: duplicateSafetyCheck,
+    });
+
+    return {
+      strategyName: strategy.name,
+      signal,
+      safetyCheck: duplicateSafetyCheck,
+    };
+  }
+
   const order = await broker.placeOrder(signal.suggestedOrder);
-  recordOrderAttempt(signal.suggestedOrder);
   await appendAuditLogSafely({
     type: "order_requested",
     strategyName: strategy.name,
