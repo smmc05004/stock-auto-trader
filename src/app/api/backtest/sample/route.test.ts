@@ -29,5 +29,15 @@ describe("POST /api/backtest/sample", () => {
 
     expect(response.status).toBe(400);
     expect(data.error).toBe("Invalid backtest request.");
+    expect(data.details.initialCash).toEqual(["Number must be greater than 0"]);
+  });
+
+  it("returns 400 when the fee rate is outside the accepted range", async () => {
+    const response = await POST(createRequest({ initialCash: 1_000_000, feeRate: 0.2 }));
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe("Invalid backtest request.");
+    expect(data.details.feeRate).toEqual(["Number must be less than or equal to 0.1"]);
   });
 });

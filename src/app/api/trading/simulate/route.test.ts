@@ -76,4 +76,24 @@ describe("POST /api/trading/simulate", () => {
     expect(response.status).toBe(403);
     expect(data.error).toBe("Order execution is disabled or the execution token is invalid.");
   });
+
+  it("returns 400 when the symbol is empty", async () => {
+    const { POST } = await loadRoute();
+    const response = await POST(createRequest({ symbol: "" }));
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe("Invalid simulation request.");
+    expect(data.details.symbol).toEqual(["String must contain at least 1 character(s)"]);
+  });
+
+  it("returns 400 when executeOrder is not a boolean", async () => {
+    const { POST } = await loadRoute();
+    const response = await POST(createRequest({ symbol: "005930", executeOrder: "true" }));
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe("Invalid simulation request.");
+    expect(data.details.executeOrder).toEqual(["Expected boolean, received string"]);
+  });
 });
