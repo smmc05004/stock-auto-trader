@@ -8,12 +8,18 @@ export const momentumStrategyConfigSchema = z.object({
 });
 
 export type MomentumStrategyConfig = z.infer<typeof momentumStrategyConfigSchema>;
+export type MomentumStrategyConfigInput = z.input<typeof momentumStrategyConfigSchema>;
 
-export function loadMomentumStrategyConfig() {
+export function loadMomentumStrategyConfig(overrides: Partial<MomentumStrategyConfigInput> = {}) {
+  const definedOverrides = Object.fromEntries(
+    Object.entries(overrides).filter(([, value]) => value !== undefined),
+  );
+
   return momentumStrategyConfigSchema.parse({
     buyChangeRateThreshold: process.env.STRATEGY_BUY_CHANGE_RATE_THRESHOLD,
     sellChangeRateThreshold: process.env.STRATEGY_SELL_CHANGE_RATE_THRESHOLD,
     orderQuantity: process.env.STRATEGY_ORDER_QUANTITY,
     confidence: process.env.STRATEGY_CONFIDENCE,
+    ...definedOverrides,
   });
 }

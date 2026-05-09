@@ -3,13 +3,14 @@ import { z } from "zod";
 import { createBrokerClient } from "@/lib/broker";
 import { env } from "@/lib/config/env";
 import { runStrategy } from "@/lib/engine/tradingEngine";
-import { loadMomentumStrategyConfig } from "@/lib/strategy/config";
+import { loadMomentumStrategyConfig, momentumStrategyConfigSchema } from "@/lib/strategy/config";
 import { createSampleMomentumStrategy } from "@/lib/strategy/samples/momentumStrategy";
 
 const requestSchema = z.object({
   symbol: z.string().min(1).default("005930"),
   executeOrder: z.boolean().default(false),
   executionToken: z.string().optional(),
+  strategyConfig: momentumStrategyConfigSchema.partial().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     const broker = createBrokerClient();
-    const strategy = createSampleMomentumStrategy(loadMomentumStrategyConfig());
+    const strategy = createSampleMomentumStrategy(loadMomentumStrategyConfig(input.strategyConfig));
 
     const decision = await runStrategy({
       broker,

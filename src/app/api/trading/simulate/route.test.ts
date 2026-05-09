@@ -68,6 +68,29 @@ describe("POST /api/trading/simulate", () => {
     expect(data.order).toBeUndefined();
   });
 
+  it("applies request strategy settings to the sample strategy", async () => {
+    const { POST } = await loadRoute();
+    const response = await POST(
+      createRequest({
+        symbol: "005930",
+        strategyConfig: {
+          buyChangeRateThreshold: -0.1,
+          orderQuantity: 4,
+          confidence: 0.8,
+        },
+      }),
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(data.signal.action).toBe("buy");
+    expect(data.signal.confidence).toBe(0.8);
+    expect(data.signal.suggestedOrder).toMatchObject({
+      side: "buy",
+      quantity: 4,
+    });
+  });
+
   it("blocks order execution without a matching execution token", async () => {
     const { POST } = await loadRoute("secret-token");
     const response = await POST(createRequest({ symbol: "005930", executeOrder: true }));
@@ -95,5 +118,22 @@ describe("POST /api/trading/simulate", () => {
     expect(response.status).toBe(400);
     expect(data.error).toBe("Invalid simulation request.");
     expect(data.details.executeOrder).toEqual(["Expected boolean, received string"]);
+  });
+
+  it("returns 400 when strategy settings are outside the accepted range", async () => {
+    const { POST } = await loadRoute();
+    const response = await POST(
+      createRequest({
+        symbol: "005930",
+        strategyConfig: {
+          confidence: 2,
+        },
+      }),
+    );
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe("Invalid simulation request.");
+    expect(data.details.strategyConfig).toEqual(["Number must be less than or equal to 1"]);
   });
 });
