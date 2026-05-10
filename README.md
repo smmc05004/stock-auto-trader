@@ -25,7 +25,7 @@ src/lib/types           공통 도메인 타입
 
 ## 로드맵
 
-운영 환경 변수와 live 전환 절차는 [`docs/operations-checklist.md`](./docs/operations-checklist.md)에 정리합니다. KIS API 세부 운영 기준은 [`docs/kis-operations.md`](./docs/kis-operations.md)를 참고합니다. Vercel paper 자동 실행 준비 계획은 [`docs/paper-auto-run-plan.md`](./docs/paper-auto-run-plan.md)에 둡니다.
+운영 환경 변수와 live 전환 절차는 [`docs/operations-checklist.md`](./docs/operations-checklist.md)에 정리합니다. KIS API 세부 운영 기준은 [`docs/kis-operations.md`](./docs/kis-operations.md)를 참고합니다. Vercel paper 자동 실행 준비 계획은 [`docs/paper-auto-run-plan.md`](./docs/paper-auto-run-plan.md)에 둡니다. 실전 자동매매 배포 구조는 [`docs/live-deployment-architecture.md`](./docs/live-deployment-architecture.md)에 정리합니다.
 
 ### 완료
 
