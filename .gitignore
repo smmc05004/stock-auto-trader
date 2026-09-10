@@ -9,3 +9,5 @@ coverage
 ROADMAP.md
 data
 .vercel
+deploy/paper.env
+*.tsbuildinfo

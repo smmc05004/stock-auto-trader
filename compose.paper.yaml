@@ -1,0 +1,29 @@
+services:
+  paper-probe:
+    build:
+      context: .
+      dockerfile: Dockerfile.paper
+    image: stock-auto-trader-paper:local
+    env_file: ./deploy/paper.env
+    environment:
+      BROKER_PROVIDER: kis
+      TRADING_MODE: paper
+      ALLOW_LIVE_TRADING: "false"
+      KIS_BASE_URL: ""
+      KIS_TOKEN_CACHE_PATH: /app/data/kis-token.json
+    volumes:
+      - paper-data:/app/data
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: "2"
+
+volumes:
+  paper-data:

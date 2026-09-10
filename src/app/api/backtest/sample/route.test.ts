@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { NextRequest } from "next/server";
 import { POST } from "@/app/api/backtest/sample/route";
 
 function createRequest(body: unknown) {
-  return new Request("http://localhost/api/backtest/sample", {
+  return new NextRequest("http://localhost/api/backtest/sample", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

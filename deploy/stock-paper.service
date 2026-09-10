@@ -1,0 +1,11 @@
+[Unit]
+Description=One-cycle KIS paper order test
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/ubuntu/stock-auto-trader
+ExecStart=/usr/bin/docker compose -f compose.paper.yaml run --rm --name stock-paper-cycle paper-probe node paper-cycle.cjs
+TimeoutStartSec=120
+ExecStopPost=-/usr/bin/docker stop -t 10 stock-paper-cycle

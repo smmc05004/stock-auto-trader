@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:paper": "node scripts/build-paper.mjs",
+    "paper:probe": "node dist/paper-probe.cjs",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run"
@@ -20,6 +22,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "^0.28.2",
     "eslint": "^9",
     "eslint-config-next": "15.4.2",
     "typescript": "^5",

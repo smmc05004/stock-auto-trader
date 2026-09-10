@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
 
 function createRequest(body: unknown) {
-  return new Request("http://localhost/api/trading/simulate", {
+  return new NextRequest("http://localhost/api/trading/simulate", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

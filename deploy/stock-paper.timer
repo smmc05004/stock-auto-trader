@@ -1,0 +1,12 @@
+[Unit]
+Description=Check the paper test each minute during Korean daytime
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 10:30..59:00 Asia/Seoul
+OnCalendar=Mon..Fri *-*-* 11..15:*:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=stock-paper.service
+
+[Install]
+WantedBy=timers.target
