@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry pending paper releases and refresh buy permission
+
+[Timer]
+OnBootSec=10s
+OnUnitInactiveSec=30s
+AccuracySec=1s
+Unit=stock-range-reconcile.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,35 @@
+name: stock-auto-trader
+services:
+  range:
+    image: ${RANGE_IMAGE:?Immutable image reference required}
+    env_file:
+      - /etc/stock-range/paper.env
+      - /etc/stock-range/range.env
+    environment:
+      BROKER_PROVIDER: kis
+      TRADING_MODE: paper
+      ALLOW_LIVE_TRADING: "false"
+      KIS_BASE_URL: ""
+      KIS_TOKEN_CACHE_PATH: /app/data/kis-token.json
+      RANGE_DB_PATH: /app/data/range.sqlite
+      RANGE_DEPLOYMENT_GATE: /app/control/gate.json
+    command: [node, range-runner.cjs]
+    volumes:
+      - range-data:/app/data
+      - /var/lib/stock-range-deploy/control:/app/control:ro
+    ports: ["127.0.0.1:8787:8787"]
+    # The host reconciler starts it only with a closed gate after each boot/crash.
+    restart: "no"
+    stop_grace_period: 180s
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 384m
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "3"}
+volumes:
+  range-data:
+    external: true
+    name: ${RANGE_VOLUME:?Existing volume name required}

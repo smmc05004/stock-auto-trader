@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { readDeploymentGate } from "../src/lib/range/deployment";
 import { setTimeout as delay } from "node:timers/promises";
 import { RangeBroker } from "../src/lib/range/broker";
 import { RangeEngine, type Config } from "../src/lib/range/engine";
@@ -20,6 +22,11 @@ const broker = new RangeBroker(), engine = new RangeEngine(store, broker, config
 const shadow = new ShadowComparison(store, config.fee);
 const revision = "feed-recovery-20260916";
 const gitCommit = process.env.APP_GIT_COMMIT ?? "unknown";
+const gateFile = process.env.RANGE_DEPLOYMENT_GATE;
+const bootId = gateFile ? readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() : "unmanaged";
+const gate = () => readDeploymentGate(gateFile, gitCommit, bootId);
+engine.entryAllowed = () => gate().allowed;
+let tickInProgress = false;
 shadow.invalidate("process_restart");
 let lastError = "", stopping = false, lastShadowSecond = 0;
 const feed = new FeedController(broker.connect.bind(broker), s => {
@@ -39,7 +46,7 @@ function report() {
   const now = Date.now(), k = korea(now), day = s.days.indexOf(k.date) + 1;
   const quality = dataQuality(engine.samples, now);
   const signal = makeBox(engine.samples, now, day % 2 ? "A" : "B", config.fee);
-  const entryBlockReason = s.halted ?? (lastError || (
+  const entryBlockReason = s.halted ?? (!gate().allowed ? gate().reason : lastError || (
     !feedSession() || k.minute < 570 || k.minute >= 915 ? "outside_entry_session" :
     s.active ? "managing_orders_or_position" : !feed.ready ? "feed_reconnecting" :
     !quote || now - quote.at > 3000 || now - engine.lastTrade > 5000 ? "no_fresh_market" :
@@ -47,9 +54,9 @@ function report() {
     !engine.strategyArmed() ? "orders_not_armed" : day < 3 ? "observation_or_preflight_day" :
     s.exiting || s.streak >= 3 || s.boxes >= 30 || now - s.lastEnd < 60_000 ? "risk_limit_or_cooldown" :
     signal.box && (s.counts[`${signal.box.low}:${signal.box.high}`] ?? 0) >= 2 ? "box_reentry_limit" : signal.reason));
-  return { gitCommit, revision, marketData: quality, feed: feed.snapshot(), entryBlockReason, version: VERSION, mode: "KIS PAPER ONLY", config, day: s.days.indexOf(korea(Date.now()).date) + 1,
+  return { gitCommit, revision, deployment: { ...gate(), bootId, tickInProgress, protocol: 1 }, marketData: quality, feed: feed.snapshot(), entryBlockReason, version: VERSION, mode: "KIS PAPER ONLY", config, day: s.days.indexOf(korea(Date.now()).date) + 1,
     status: s.halted ?? (lastError || "running"), safeToStop: s.safeToStop && Date.now() - s.lastSync < 60_000,
-    ordersArmed: engine.strategyArmed(),
+    ordersArmed: engine.strategyArmed() && gate().allowed,
     warmupSamples: engine.samples.length, quoteAgeMs: quote ? Date.now() - quote.at : null,
     estimatedEquity: s.cash + s.quantity * (quote?.bid ?? (s.quantity ? s.basis / s.quantity : 0)) * (1 - config.fee),
     state: s, shadow: shadow.states, recentEvents: store.db.prepare("SELECT at,kind,payload FROM events ORDER BY id DESC LIMIT 60").all(),
@@ -83,6 +90,7 @@ async function run() {
   while (true) {
     const now = Date.now(), k = korea(now), inExperiment = k.date >= config.start && k.date <= config.end;
     try {
+      tickInProgress = true;
       await engine.tick(); lastError = "";
       if ((k.minute >= 920 || k.date > config.end) && engine.state.safeToStop) {
         await feed.tick(false);
@@ -93,9 +101,9 @@ async function run() {
       lastError = e instanceof Error && /^(KIS |Account\/order|Invalid |Inconsistent |Missing |Incomplete |Repeated |Order pagination|Sell exceeds|Fill amount)/.test(e.message) ? e.message : "runner_error_check_orders";
       store.event("runner_error", { reason: lastError });
       if (engine.state.active) { engine.state.exiting = "runner_error"; engine.save(); }
-    }
+    } finally { tickInProgress = false; }
     if (stopping && engine.state.safeToStop && !engine.state.active && !engine.state.halted) break;
-    await delay(engine.state.active ? 1000 : k.minute >= 540 && k.minute < 920 && inExperiment ? 2000 : 60_000);
+    await delay(engine.state.active ? 1000 : gateFile || k.minute >= 540 && k.minute < 920 && inExperiment ? 2000 : 60_000);
   }
   clearInterval(feedTimer); feed.stop(); server.close(); clearInterval(heartbeat); store.close();
 }
