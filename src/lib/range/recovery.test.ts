@@ -58,12 +58,12 @@ describe("independent reconnect controller", () => {
   it("ignores old connection callbacks and duplicate failures, waits for close, and requires both subscriptions", async () => {
     let now=at;
     const connections: {down:(reason?:string)=>void;ack:(tr:string,ok:boolean,code:string)=>void;quote:(s:Sample)=>void;socket:{readyState:number;close:()=>void}}[]=[];
-    const sink=vi.fn(), disconnected=vi.fn();
+    const sink=vi.fn(), disconnected=vi.fn(), events=vi.fn();
     const connect=vi.fn(async (q:(s:Sample)=>void,_t:(at:number)=>void,d:(reason?:string)=>void,a:(tr:string,ok:boolean,code:string)=>void)=>{
       const socket={readyState:1,close(){this.readyState=2;}};
       connections.push({down:d,ack:a,quote:q,socket}); return socket;
     });
-    const feed=new FeedController(connect,sink,vi.fn(),disconnected,vi.fn(),()=>now,()=>0);
+    const feed=new FeedController(connect,sink,vi.fn(),disconnected,events,()=>now,()=>0);
     await feed.tick(true); const first=connections[0];
     first.quote(quote(now)); expect(sink).not.toHaveBeenCalled();
     first.ack("H0STASP0",true,"ok"); expect(feed.ready).toBe(false);
@@ -72,6 +72,8 @@ describe("independent reconnect controller", () => {
     now+=1500; await feed.tick(true); expect(connect).toHaveBeenCalledTimes(1);
     first.socket.readyState=3; await feed.tick(true); expect(connect).toHaveBeenCalledTimes(2);
     const second=connections[1]; second.ack("H0STASP0",true,"ok");second.ack("H0STCNT0",true,"ok");
+    expect(events).toHaveBeenCalledWith("feed_ready", expect.objectContaining({ generation: 2, downtimeMs: 1500 }));
+    expect(feed.snapshot()).toMatchObject({ lastDownAt: at, lastReadyAt: now });
     first.down("late_close"); expect(feed.ready).toBe(true);
     first.quote(quote(now)); expect(sink).toHaveBeenCalledTimes(1);
     second.quote(quote(now)); expect(sink).toHaveBeenCalledTimes(2);

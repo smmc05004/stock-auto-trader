@@ -4,7 +4,8 @@ import { RangeStore } from "./store";
 import { VERSION, SYMBOL, korea, makeBox, shock, ceilTick, floorTick, dataQuality, validSample, type Box, type Sample } from "./strategy";
 export type Config = { start: string; end: string; fee: number; enabled: boolean; cancellationVerified: boolean; autoPreflight?: boolean; feeBasis?: string };
 export type LocalOrder = { key: string; id?: string; org?: string; side: "buy" | "sell"; qty: number; price: number | null; filled: number; amount: number; remaining: number; terminal: boolean; cancelled?: boolean; at: number; status: "intent" | "accepted" | "unknown"; cancelAt?: number; cancelId?: string; leg: number };
-export type State = { version: string; configHash: string; date: string; days: string[]; active?: Box; orders: LocalOrder[]; cash: number; quantity: number; basis: number; firstFill?: number; exiting?: string; halted?: string; realized: number; dayStart: number; high: number; drawdown: number; streak: number; boxes: number; groupStart: number; lastEnd: number; lastEval: number; counts: Record<string, number>; pnl: Record<string, number>; lastSync: number; safeToStop: boolean; preflight?: { status: "running" | "passed" | "failed"; at: number; pnl?: number; cancelOrderId?: string } };
+export type Decision = { at: number; reason: string; marketData: ReturnType<typeof dataQuality> };
+export type State = { lastDecision?: Decision; version: string; configHash: string; date: string; days: string[]; active?: Box; orders: LocalOrder[]; cash: number; quantity: number; basis: number; firstFill?: number; exiting?: string; halted?: string; realized: number; dayStart: number; high: number; drawdown: number; streak: number; boxes: number; groupStart: number; lastEnd: number; lastEval: number; counts: Record<string, number>; pnl: Record<string, number>; lastSync: number; safeToStop: boolean; preflight?: { status: "running" | "passed" | "failed"; at: number; pnl?: number; cancelOrderId?: string } };
 type Broker = Pick<RangeBroker, "orders" | "positions" | "submit" | "cancel">;
 export function linkedCancellation(local: LocalOrder, original: RemoteOrder, rows: RemoteOrder[]) {
   return Boolean(local.cancelAt && local.cancelId && original.id === local.id && original.symbol === SYMBOL && original.date === korea(local.at).date.replaceAll("-", "") && original.side === local.side && original.qty === local.qty && original.rejected === 0 && original.remaining === 0 && rows.some(c => c.id === local.cancelId && c.parent === original.id && c.date === original.date && c.symbol === original.symbol && c.side === original.side && c.cancelled && c.rejected === 0 && c.remaining === 0 && c.filled === 0 && c.qty === original.qty - original.filled && c.qty > 0));
@@ -70,7 +71,11 @@ export class RangeEngine {
     if (this.state.active) { this.state.exiting = "feed_disconnected"; this.save(); }
   }
   private equity() { return this.state.cash + this.state.quantity * (this.latest?.bid ?? (this.state.quantity ? this.state.basis / this.state.quantity : 0)) * (1 - this.config.fee); }
-  private block(reason: string) { this.state.counts[reason] = (this.state.counts[reason] ?? 0) + 1; this.event("decision", { reason, at: this.clock() }); }
+  private decision(reason: string, at = this.clock()) {
+    this.state.lastDecision = { reason, at, marketData: dataQuality(this.samples, at) };
+    this.event("decision", this.state.lastDecision);
+  }
+  private block(reason: string) { this.state.counts[reason] = (this.state.counts[reason] ?? 0) + 1; this.decision(reason); }
   async reconcile() {
     const s = this.state, now = this.clock(), date = korea(now).date;
     const start = s.date && s.active ? s.date : date;
@@ -148,7 +153,8 @@ export class RangeEngine {
   }
   async tick() {
     this.store.assertOwner();
-    const now = this.clock(), k = korea(now), s = this.state;
+    let now = this.clock(), k = korea(now);
+    const s = this.state;
     if (k.date < this.config.start || k.date > this.config.end || k.minute >= 915 || this.shutdown) s.exiting = "session_end";
     if (s.active && (!this.latest || now - this.latest.at > 5000 || now - this.lastTrade > 15_000)) s.exiting = "stale_feed";
     if (s.active && this.latest && this.latest.bid <= s.active.stop) s.exiting = "stop_loss";
@@ -157,10 +163,12 @@ export class RangeEngine {
     await this.reconcile();
     if (s.halted) { this.save(); return; }
     // Reconciliation may take seconds: reassess urgent conditions after network waits.
-    const afterSync = this.clock();
+    now = this.clock(); k = korea(now);
+    const afterSync = now;
     if (s.active && (korea(afterSync).minute >= 915 || korea(afterSync).date > this.config.end || this.shutdown)) s.exiting = "session_end";
     if (s.active && (!this.latest || afterSync - this.latest.at > 5000 || afterSync - this.lastTrade > 15_000)) s.exiting = "stale_feed";
     if (s.active && this.latest && this.latest.bid <= s.active.stop) s.exiting = "stop_loss";
+    if (s.active && shock(this.samples, now)) s.exiting = "volatility_shock";
     if (s.firstFill && afterSync - s.firstFill >= 120_000) s.exiting = "holding_timeout";
     if (!s.active && s.date !== k.date) {
       if (s.date) this.event("day_summary", { date: s.date, realized: s.realized - s.dayStart, drawdown: s.drawdown, boxes: s.boxes, excluded: s.counts });
@@ -171,8 +179,8 @@ export class RangeEngine {
     if (s.active) {
       if (s.preflight?.status === "running") s.exiting = "preflight_cleanup";
       for (const o of s.orders.filter(o => !o.terminal && o.status === "accepted")) {
-        if (s.exiting || (o.side === "buy" && now - o.at >= 10_000)) await this.cancel(o);
-        if (o.cancelAt && now - o.cancelAt > 30_000 && !o.terminal) { s.halted = "cancel_confirmation_timeout"; this.save(); return; }
+        if (s.exiting || (o.side === "buy" && this.clock() - o.at >= 10_000)) await this.cancel(o);
+        if (o.cancelAt && this.clock() - o.cancelAt > 30_000 && !o.terminal) { s.halted = "cancel_confirmation_timeout"; this.save(); return; }
       }
       if (s.exiting) {
         if (s.orders.every(o => o.terminal) && s.quantity > 0) await this.submit("sell", s.quantity, null, -1);
@@ -198,7 +206,7 @@ export class RangeEngine {
           if (s.orders.some(o => o.filled > 0)) s.streak = pnl < 0 ? s.streak + 1 : 0;
           this.event("box_closed", { strategy: s.active.strategy, pnl, reason: s.exiting ?? "targets_or_no_fill" });
         }
-        s.active = undefined; s.orders = []; s.firstFill = undefined; s.lastEnd = now;
+        s.active = undefined; s.orders = []; s.firstFill = undefined; s.lastEnd = this.clock();
         if (s.exiting !== "daily_risk_stop") s.exiting = undefined;
       }
       this.save(); return;
@@ -216,6 +224,7 @@ export class RangeEngine {
       s.preflight = { status: "running", at: now };
       s.active = { low: price, high: price + 20, width: 20, stop: price - 10, buys: [price], targets: [price + 20], quantities: [1], at: now, strategy: "A" };
       s.groupStart = s.realized; s.orders = []; s.safeToStop = false; this.save();
+      this.decision("preflight_started", now);
       this.event("preflight_started", { symbol: SYMBOL, quantity: 1, price, purpose: "cancel_verification_not_strategy" });
       await this.submit("buy", 1, price, 0);
       s.exiting = "preflight_cleanup"; this.save(); return;
@@ -231,10 +240,11 @@ export class RangeEngine {
     const key = `${result.box.low}:${result.box.high}`;
     if ((s.counts[key] ?? 0) >= 2) { this.block("box_reentry_limit"); this.save(); return; }
     s.counts[key] = (s.counts[key] ?? 0) + 1; s.active = result.box; s.orders = []; s.groupStart = s.realized; s.boxes++; s.safeToStop = false; this.save();
+    this.decision("entry_selected", now);
     this.event("box_open", s.active);
     for (let leg = 0; leg < result.box.buys.length; leg++) {
       const fresh = this.latest;
-      if (!fresh || this.clock() - fresh.at > 3000 || this.clock() - this.lastTrade > 5000 || fresh.bid <= result.box.stop || fresh.ask - fresh.bid > 10 || fresh.ask <= result.box.buys[leg] || korea(this.clock()).minute >= 915 || this.shutdown) { s.exiting = "entry_aborted"; this.save(); break; }
+      if (!fresh || this.clock() - fresh.at > 3000 || this.clock() - this.lastTrade > 5000 || fresh.bid <= result.box.stop || fresh.ask - fresh.bid > 10 || fresh.ask <= result.box.buys[leg] || korea(this.clock()).minute >= 915 || this.shutdown) { s.exiting = "entry_aborted"; this.block("entry_aborted"); this.save(); break; }
       await this.submit("buy", result.box.quantities[leg], result.box.buys[leg], leg);
     }
     this.save();

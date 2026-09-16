@@ -5,8 +5,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { RangeBroker } from "../src/lib/range/broker";
 import { RangeEngine, type Config } from "../src/lib/range/engine";
 import { RangeStore } from "../src/lib/range/store";
-import { korea, VERSION, dataQuality, makeBox } from "../src/lib/range/strategy";
+import { korea, VERSION } from "../src/lib/range/strategy";
 import { FeedController } from "../src/lib/range/feed";
+import { entryReport } from "../src/lib/range/report";
 import { ShadowComparison } from "../src/lib/range/shadow";
 
 const config: Config = {
@@ -18,9 +19,9 @@ const config: Config = {
 };
 const store = new RangeStore(process.env.RANGE_DB_PATH ?? "/app/data/range.sqlite");
 store.claim();
-const broker = new RangeBroker(), engine = new RangeEngine(store, broker, config);
+const broker = new RangeBroker((kind, data) => store.event(kind, data)), engine = new RangeEngine(store, broker, config);
 const shadow = new ShadowComparison(store, config.fee);
-const revision = "feed-recovery-20260916";
+const revision = "evaluation-clock-20260916";
 const gitCommit = process.env.APP_GIT_COMMIT ?? "unknown";
 const gateFile = process.env.RANGE_DEPLOYMENT_GATE;
 const bootId = gateFile ? readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() : "unmanaged";
@@ -43,18 +44,9 @@ const feedTimer = setInterval(() => { void feed.tick(feedSession()).catch(() => 
 const escape = (s: unknown) => String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 function report() {
   const s = engine.state, quote = engine.latest;
-  const now = Date.now(), k = korea(now), day = s.days.indexOf(k.date) + 1;
-  const quality = dataQuality(engine.samples, now);
-  const signal = makeBox(engine.samples, now, day % 2 ? "A" : "B", config.fee);
-  const entryBlockReason = s.halted ?? (!gate().allowed ? gate().reason : lastError || (
-    !feedSession() || k.minute < 570 || k.minute >= 915 ? "outside_entry_session" :
-    s.active ? "managing_orders_or_position" : !feed.ready ? "feed_reconnecting" :
-    !quote || now - quote.at > 3000 || now - engine.lastTrade > 5000 ? "no_fresh_market" :
-    !quality.ready ? quality.reason : now - s.lastSync > 15_000 ? "account_snapshot_stale" :
-    !engine.strategyArmed() ? "orders_not_armed" : day < 3 ? "observation_or_preflight_day" :
-    s.exiting || s.streak >= 3 || s.boxes >= 30 || now - s.lastEnd < 60_000 ? "risk_limit_or_cooldown" :
-    signal.box && (s.counts[`${signal.box.low}:${signal.box.high}`] ?? 0) >= 2 ? "box_reentry_limit" : signal.reason));
-  return { gitCommit, revision, deployment: { ...gate(), bootId, tickInProgress, protocol: 1 }, marketData: quality, feed: feed.snapshot(), entryBlockReason, version: VERSION, mode: "KIS PAPER ONLY", config, day: s.days.indexOf(korea(Date.now()).date) + 1,
+  const now = Date.now();
+  return { gitCommit, revision, deployment: { ...gate(), bootId, tickInProgress, protocol: 1 }, ...entryReport(engine, now, { gate: gate(), feedReady: feed.ready, inSession: feedSession(), lastError }),
+    feed: { ...feed.snapshot(), droppedFrames: broker.droppedFrames }, version: VERSION, mode: "KIS PAPER ONLY", config, day: s.days.indexOf(korea(Date.now()).date) + 1,
     status: s.halted ?? (lastError || "running"), safeToStop: s.safeToStop && Date.now() - s.lastSync < 60_000,
     ordersArmed: engine.strategyArmed() && gate().allowed,
     warmupSamples: engine.samples.length, quoteAgeMs: quote ? Date.now() - quote.at : null,
@@ -80,7 +72,7 @@ const server = createServer((req, res) => {
   const r = report();
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
-  res.end(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>모의 구간 매매</title><style>body{font:16px system-ui;max-width:1050px;margin:32px auto;padding:20px;background:#101722;color:#edf4ff}a{color:#87c9ff}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#192536;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #456;text-align:left}</style><h1>KODEX 코스닥150 · 모의투자</h1><p>배포 커밋: ${escape(gitCommit)}</p><p>${escape(VERSION)} · ${escape(r.day)}일차 · 주문 ${r.ordersArmed ? "활성" : "비활성(관찰)"}</p><p>진입 판단: ${escape(r.entryBlockReason)} · 최근 30분 ${r.marketData.samples30m}개 / 5분 ${r.marketData.samples5m}개 · 최대 공백 ${r.marketData.maxGapMs}ms · 연결 시도 ${r.feed.attempts}</p><p>상태: ${escape(r.status)} / 종료 확인: ${r.safeToStop ? "보유·미체결 없음" : "종료 확인 필요"}</p><p>추정 자산 ${r.estimatedEquity.toFixed(0)}원 · 실현손익 ${r.state.realized.toFixed(0)}원 · 보유 ${r.state.quantity}주 · 준비 표본 ${r.warmupSamples}/1800</p><p>${escape(r.note)}</p><p><a href="/events.csv">오늘 CSV</a> · <a href="/report.json">전체 상태 JSON</a></p><h2>현재 주문</h2><pre>${escape(JSON.stringify(r.state.orders, null, 2))}</pre><h2>진입 제외 사유</h2><pre>${escape(JSON.stringify(r.state.counts, null, 2))}</pre><h2>최근 기록</h2><table><tr><th>시각(KST)</th><th>이벤트</th><th>내용</th></tr>${r.recentEvents.map(e => `<tr><td>${escape(new Date(Number(e.at)).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }))}</td><td>${escape(e.kind)}</td><td>${escape(e.payload)}</td></tr>`).join("")}</table></html>`);
+  res.end(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>모의 구간 매매</title><style>body{font:16px system-ui;max-width:1050px;margin:32px auto;padding:20px;background:#101722;color:#edf4ff}a{color:#87c9ff}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#192536;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #456;text-align:left}</style><h1>KODEX 코스닥150 · 모의투자</h1><p>배포 커밋: ${escape(gitCommit)}</p><p>${escape(VERSION)} · ${escape(r.day)}일차 · 주문 ${r.ordersArmed ? "활성" : "비활성(관찰)"}</p><p>마지막 실제 판단: ${escape(r.entryBlockReason)} (${escape(r.lastDecision ? new Date(r.lastDecision.at).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "기록 없음")})</p><p>현재 진입 상태: ${escape(r.currentEntryStatus)} · 최근 30분 ${r.marketData.samples30m}개 / 5분 ${r.marketData.samples5m}개 · 최대 공백 ${r.marketData.maxGapMs}ms · 연결 시도 ${r.feed.attempts}</p><p>공백 해제 예상: ${escape(r.marketData.gapClearsAfter ? new Date(r.marketData.gapClearsAfter).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }) : "해당 없음")} · 폐기 시세 ${r.feed.droppedFrames.stale + r.feed.droppedFrames.future + r.feed.droppedFrames.invalidTime}개(프로세스 시작 이후)</p><p>상태: ${escape(r.status)} / 종료 확인: ${r.safeToStop ? "보유·미체결 없음" : "종료 확인 필요"}</p><p>추정 자산 ${r.estimatedEquity.toFixed(0)}원 · 실현손익 ${r.state.realized.toFixed(0)}원 · 보유 ${r.state.quantity}주 · 준비 표본 ${r.warmupSamples}/1800</p><p>${escape(r.note)}</p><p><a href="/events.csv">오늘 CSV</a> · <a href="/report.json">전체 상태 JSON</a></p><h2>현재 주문</h2><pre>${escape(JSON.stringify(r.state.orders, null, 2))}</pre><h2>진입 제외 사유</h2><pre>${escape(JSON.stringify(r.state.counts, null, 2))}</pre><h2>최근 기록</h2><table><tr><th>시각(KST)</th><th>이벤트</th><th>내용</th></tr>${r.recentEvents.map(e => `<tr><td>${escape(new Date(Number(e.at)).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }))}</td><td>${escape(e.kind)}</td><td>${escape(e.payload)}</td></tr>`).join("")}</table></html>`);
 });
 server.listen(8787, "0.0.0.0");
 const heartbeat = setInterval(() => { try { store.heartbeat(); } catch { process.exit(2); } }, 10_000);

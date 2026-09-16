@@ -56,3 +56,7 @@
 출처: https://securities.koreainvestment.com/main/customer/guide/_static/TF04ae010000.jsp (조회 2026-09-14, 공시표 기준일 2025-10-27).
 
 RANGE_FEE_RATE=0.000146527, RANGE_AUTO_PREFLIGHT=true, RANGE_ORDERS_ENABLED=true, RANGE_CANCEL_VERIFIED=false. 기존 1일차 관찰·2일차 취소 검증·3일차 이후 전략 주문 일정은 유지한다. 취소 검증을 허위로 완료 표시하지 않는다.
+
+## 2026-09-16 평가 시각·운영 진단 수정
+
+계좌 조회 완료 시각을 기준으로 시세 품질과 진입 가능 시간을 평가한다. 조회 중 수집된 시세와 조회 전의 과거 시각을 혼합하지 않는다. 실제 마지막 판단과 현재 미리보기를 보고서에서 구분한다. 가격·수량·수수료·위험 한도·공백 허용 기준은 유지한다. 세부 사항은 [평가 시각 수정](evaluation-clock-fix-20260916.md)을 따른다. 연결 단절 시 버퍼 처리의 최신 기준은 [시세 복구 계획](market-data-recovery-plan-20260916.md)이며, 과거의 ‘윈도 초기화’ 문구보다 우선한다.
