@@ -9,29 +9,50 @@ export class RangeBroker {
   private last = 0;
   private approval?: { key: string; at: number };
   private chain: Promise<unknown> = Promise.resolve();
-  constructor() {
+  readonly droppedFrames = { stale: 0, future: 0, invalidTime: 0, lastAt: 0 };
+  private lastDropEvent = 0;
+  constructor(readonly diagnostic: (kind: string, data: unknown) => void = () => {}) {
     if (process.env.TRADING_MODE !== "paper" || process.env.ALLOW_LIVE_TRADING !== "false" || process.env.BROKER_PROVIDER !== "kis" || process.env.KIS_BASE_URL) throw new Error("Range runner requires fixed KIS paper environment");
     if (!process.env.KIS_PAPER_APP_KEY || !process.env.KIS_PAPER_APP_SECRET || !/^5\d{7}$/.test(process.env.KIS_PAPER_ACCOUNT_NO ?? "") || process.env.KIS_PAPER_ACCOUNT_PRODUCT_CODE !== "01") throw new Error("Explicit paper stock credentials required");
   }
   private account() { return { CANO: process.env.KIS_PAPER_ACCOUNT_NO!, ACNT_PRDT_CD: "01" }; }
   private request(endpoint: string, tr: string, body: Record<string, string>, post = false, cont?: string): Promise<{ data: Record<string, unknown>; more: boolean }> {
+    const queuedAt = Date.now();
     const job = this.chain.then(async () => {
-      const token = await this.auth.getAccessToken();
-      await delay(Math.max(0, this.last + 1100 - Date.now())); this.last = Date.now();
-      const url = new URL(endpoint, BASE);
-      if (!post) Object.entries(body).forEach(([k, v]) => url.searchParams.set(k, v));
-      const res = await fetch(url, { method: post ? "POST" : "GET", headers: {
-        "content-type": "application/json", authorization: `Bearer ${token}`, appkey: process.env.KIS_PAPER_APP_KEY!, appsecret: process.env.KIS_PAPER_APP_SECRET!, tr_id: tr, custtype: "P", ...(cont ? { tr_cont: cont } : {}),
-      }, ...(post ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000) });
-      const data = await res.json() as Record<string, unknown>;
-      if (data.msg_cd === "EGW00123") {
-        // Refresh for the next reconciliation, never replay an order or cancel request.
-        await this.auth.getAccessToken(true);
-        throw new Error("KIS token refreshed; reconciliation required");
+      const startedAt = Date.now();
+      let sentAt: number | undefined, httpStatus: number | undefined, code: string | undefined;
+      let outcome = "error";
+      try {
+        const token = await this.auth.getAccessToken();
+        await delay(Math.max(0, this.last + 1100 - Date.now())); this.last = Date.now();
+        const url = new URL(endpoint, BASE);
+        if (!post) Object.entries(body).forEach(([k, v]) => url.searchParams.set(k, v));
+        sentAt = Date.now();
+        const res = await fetch(url, { method: post ? "POST" : "GET", headers: {
+          "content-type": "application/json", authorization: `Bearer ${token}`, appkey: process.env.KIS_PAPER_APP_KEY!, appsecret: process.env.KIS_PAPER_APP_SECRET!, tr_id: tr, custtype: "P", ...(cont ? { tr_cont: cont } : {}),
+        }, ...(post ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(15_000) });
+        httpStatus = res.status;
+        const data = await res.json() as Record<string, unknown>;
+        code = String(data.msg_cd ?? "unknown").replace(/[^A-Za-z0-9_]/g, "").slice(0, 64);
+        if (data.msg_cd === "EGW00123") {
+          // Refresh for the next reconciliation, never replay an order or cancel request.
+          await this.auth.getAccessToken(true);
+          throw new Error("KIS token refreshed; reconciliation required");
+        }
+        if (!res.ok) throw new Error(`KIS HTTP ${res.status} ${tr} ${code} latency=${Date.now() - this.last}ms`);
+        if (data.rt_cd !== "0") throw new Error(`KIS ${code}`);
+        outcome = "ok";
+        return { data, more: ["F", "M"].includes(res.headers.get("tr_cont") ?? "") };
+      } catch (error) {
+        if (error instanceof Error && ["TimeoutError", "AbortError"].includes(error.name)) outcome = "timeout";
+        throw error;
+      } finally {
+        const completedAt = Date.now();
+        this.diagnostic("broker_request", { tr, queuedAt, startedAt, completedAt,
+          queueMs: startedAt - queuedAt, prepareMs: (sentAt ?? completedAt) - startedAt,
+          requestMs: sentAt === undefined ? null : completedAt - sentAt,
+          totalMs: completedAt - queuedAt, httpStatus, code, outcome });
       }
-      if (!res.ok) throw new Error(`KIS HTTP ${res.status} ${tr} ${String(data.msg_cd ?? "unknown").replace(/[^A-Za-z0-9_]/g, "")} latency=${Date.now() - this.last}ms`);
-      if (data.rt_cd !== "0") throw new Error(`KIS ${String(data.msg_cd ?? "unknown")}`);
-      return { data, more: ["F", "M"].includes(res.headers.get("tr_cont") ?? "") };
     });
     this.chain = job.catch(() => undefined); return job;
   }
@@ -68,6 +89,17 @@ export class RangeBroker {
     const { data } = await this.request("/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0013U", { ...this.account(), KRX_FWDG_ORD_ORGNO: order.org, ORGN_ODNO: order.id, ORD_DVSN: "00", RVSE_CNCL_DVSN_CD: "02", ORD_QTY: String(remaining), ORD_UNPR: "0", QTY_ALL_ORD_YN: "Y", EXCG_ID_DVSN_CD: "KRX" }, true);
     return String((data.output as Record<string, string>)?.ODNO ?? "");
   }
+  acceptProviderTime(stamp: number, now: number) {
+    if (Number.isFinite(stamp) && Math.abs(now - stamp) <= 5000) return true;
+    const reason = !Number.isFinite(stamp) ? "invalidTime" : stamp > now ? "future" : "stale";
+    this.droppedFrames[reason]++; this.droppedFrames.lastAt = now;
+    // Count every discarded frame, but bound SQLite writes during a bad feed.
+    if (!this.lastDropEvent || now - this.lastDropEvent >= 60_000) {
+      this.lastDropEvent = now;
+      this.diagnostic("feed_frame_dropped", { reason, counts: { ...this.droppedFrames }, ageMs: Number.isFinite(stamp) ? now - stamp : null });
+    }
+    return false;
+  }
   async connect(onQuote: (s: Sample) => void, onTrade: (at: number) => void, onDisconnect: (reason?: string) => void, onStatus?: (tr: string, ok: boolean, code: string) => void) {
     if (!this.approval || Date.now() - this.approval.at > 3600_000) {
       const r = await fetch(`${BASE}/oauth2/Approval`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant_type: "client_credentials", appkey: process.env.KIS_PAPER_APP_KEY, secretkey: process.env.KIS_PAPER_APP_SECRET }), signal: AbortSignal.timeout(15_000) });
@@ -88,7 +120,7 @@ export class RangeBroker {
         const f = payload.split("^"); if (f[0] !== SYMBOL) return;
         const now = Date.now(), k = new Date(now + 9 * 3600_000).toISOString();
         const stamp = Date.parse(`${k.slice(0, 10)}T${f[1].slice(0, 2)}:${f[1].slice(2, 4)}:${f[1].slice(4, 6)}+09:00`);
-        if (!Number.isFinite(stamp) || Math.abs(now - stamp) > 5000) return;
+        if (!this.acceptProviderTime(stamp, now)) return;
         if (tr === "H0STCNT0") onTrade(now);
         if (tr === "H0STASP0") {
           const s = { at: now, providerAt: stamp, ask: num(f[3]), bid: num(f[13]), askSize: num(f[23]), bidSize: num(f[33]) };

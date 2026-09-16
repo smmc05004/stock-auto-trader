@@ -11,13 +11,15 @@ export class FeedController {
   nextRetryAt = 0;
   lastQuoteAt = 0;
   lastTradeAt = 0;
+  lastDownAt = 0;
+  lastReadyAt = 0;
   private startedAt = 0;
   private failed = false;
   private acknowledgements = new Set<string>();
   constructor(readonly connect: Connect, readonly quote: (s: Sample) => void, readonly trade: (at: number) => void, readonly disconnect: () => void, readonly event: (kind: string, data: unknown) => void, readonly clock = Date.now, readonly random = Math.random) {}
   private down(reason: string, generation: number) {
     if (generation !== this.generation || this.failed) return;
-    this.failed = true; this.ready = false;
+    this.failed = true; this.ready = false; this.lastDownAt = this.clock();
     this.failures++;
     this.nextRetryAt = this.clock() + [1000, 2000, 5000, 10000, 30000][Math.min(this.failures - 1, 4)] + Math.floor(this.random() * 250);
     this.event("feed_down", { generation, reason, lastQuoteAt: this.lastQuoteAt, lastTradeAt: this.lastTradeAt, nextRetryAt: this.nextRetryAt });
@@ -46,8 +48,14 @@ export class FeedController {
         if (!active()) return;
         this.event("feed_subscription", { generation, tr, ok, code });
         if (!ok) { this.down("subscription_rejected", generation); return; }
+        const wasReady = this.ready;
         this.acknowledgements.add(tr);
         this.ready = this.acknowledgements.has("H0STASP0") && this.acknowledgements.has("H0STCNT0");
+        if (this.ready && !wasReady) {
+          this.lastReadyAt = this.clock();
+          this.event("feed_ready", { generation, at: this.lastReadyAt, connectMs: this.lastReadyAt - this.startedAt,
+            downtimeMs: this.lastDownAt ? this.lastReadyAt - this.lastDownAt : null });
+        }
       });
       this.socket = socket;
       if (!active()) socket.close();
@@ -55,5 +63,5 @@ export class FeedController {
     finally { this.connecting = false; }
   }
   stop() { this.down("shutdown", this.generation); }
-  snapshot() { return { ready: this.ready, connecting: this.connecting, generation: this.generation, attempts: this.attempts, nextRetryAt: this.nextRetryAt, lastQuoteAt: this.lastQuoteAt, lastTradeAt: this.lastTradeAt }; }
+  snapshot() { return { lastDownAt: this.lastDownAt, lastReadyAt: this.lastReadyAt, ready: this.ready, connecting: this.connecting, generation: this.generation, attempts: this.attempts, nextRetryAt: this.nextRetryAt, lastQuoteAt: this.lastQuoteAt, lastTradeAt: this.lastTradeAt }; }
 }
