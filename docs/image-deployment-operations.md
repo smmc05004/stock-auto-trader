@@ -53,7 +53,7 @@ Settings → Secrets and variables → Actions → **Variables**에 아래 값�
 | `PAPER_SSM_DOCUMENT` | SSMDocument |
 | `PAPER_IMAGE_CD_ENABLED` | 최초 설정과 안전 확인 완료 후 `true` |
 
-main 보호에는 PR 필수, 필수 검사 `verify`·`image`, 최신 main 기준 검사, 강제 푸시/삭제 제한을 적용한다. PR 워크플로에는 AWS 권한이 없고, main 전용 발행 작업만 OIDC를 요청한다.
+2026-09-16 GitHub API로 main 보호를 적용했다: PR 필수, 필수 검사 `verify`·`image`, 최신 main 기준 검사, 관리자 포함, 강제 푸시/삭제 금지 및 대화 해결 필수. PR 워크플로에는 AWS 권한이 없고, main 전용 발행 작업만 OIDC를 요청한다.
 
 활성화 후 main 워크플로를 재실행하거나 새 PR을 머지한다. 재실행도 현재 main 커밋인 경우에만 목표를 변경한다. 이미지 태그는 `전체SHA-runNumber-runAttempt`, 실제 실행은 digest로 고정한다. PR CI에서 검증한 이미지 자체를 배포하는 것은 아니며, **main 커밋으로 CI에서 새로 빌드·검증한 이미지**를 tar artifact로 다음 작업에 넘겨 동일 이미지 그대로 발행한다.
 
@@ -90,3 +90,5 @@ GitHub 작업은 오프라인/대기 상태를 Summary에 명시하고 종료할
 자동 테스트: 신규 매수 차단/매도 유지, 인가 만료·부팅 변경, 배포 중 계좌 대조, 안전 상태 대기, 오프라인, 이전 버전 우선 복구, 연속 릴리스, 종료 실패, 롤백, 중간 장애, 발행 후 superseded 상태 및 업로드/적용 구분.
 
 실환경 인수(최초 설치 후 기록): ECR push/pull, 실제 OIDC 역할 가정, SSM 연결, 단일 실행기·원장 보존, 장외 정상 교체, 실패 복구, 서버 중지 중 머지 및 IP 변경 후 재시작. 현재는 미실행이다.
+
+로컬 검증 결과(2026-09-16): Vitest 75개 및 Python 21개 통과, ESLint·TypeScript·paper/Next 빌드 통과, cfn-lint 1.56.3 및 YAML/쉘 문법 검사 통과. PR: https://github.com/smmc05004/stock-auto-trader/pull/2 . PR CI는 최종 커밋의 결과를 확인한다.

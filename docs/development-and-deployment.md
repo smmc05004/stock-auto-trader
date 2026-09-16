@@ -6,7 +6,7 @@
 
 | 항목 | 구현 브랜치 상태 | 실환경 확인 |
 |---|---|---|
-| 개발 흐름 | 작업 브랜치·커밋·PR 규약 및 AI 진입 문서 | main 보호 설정 확인/적용 필요 |
+| 개발 흐름 | 작업 브랜치·커밋·PR 규약 및 AI 진입 문서 | main 보호 적용: PR 필수, verify·image 필수, 관리자 포함 |
 | CI 및 이미지 | 검사 후 Linux amd64 이미지 빌드·격리 smoke 검사 | PR CI 결과로 확인 |
 | 발행·배포 요청 | 검사한 이미지를 artifact로 전달, ECR digest 발행, SSM 호출 | AWS 권한/변수 설정 및 활성화 필요 |
 | AWS 설치 | `deploy/image/infrastructure.json` ECR·OIDC·IAM·SSM 템플릿 | 실제 스택 생성 미실행 |
