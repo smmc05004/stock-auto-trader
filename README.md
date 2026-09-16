@@ -1,5 +1,7 @@
 # Stock Auto Trader
 
+AI와 개발자는 작업 전에 [AGENTS.md](./AGENTS.md)와 [작업 및 이미지 배포 규약](./docs/development-and-deployment.md)을 읽습니다. 모든 변경은 작업 브랜치와 PR로 관리합니다. main 머지 후 Docker 이미지 자동 배포는 승인된 목표이며, 실제 구현 상태는 규약의 상태 표를 확인합니다.
+
 Next.js 기반 주식 자동매매 프로젝트 초기 구조입니다. 현재는 증권사 API 키와 실전 전략 없이도 앱과 서버 라우트를 실행할 수 있도록 `mock` 브로커와 샘플 전략을 포함합니다.
 
 ## 실행
