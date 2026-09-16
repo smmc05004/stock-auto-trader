@@ -20,6 +20,7 @@ services:
     ports: ["127.0.0.1:8787:8787"]
     # The host reconciler starts it only with a closed gate after each boot/crash.
     restart: "no"
+    stop_grace_period: 180s
     init: true
     read_only: true
     cap_drop: [ALL]

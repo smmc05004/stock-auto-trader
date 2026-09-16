@@ -124,6 +124,14 @@ class DeployTests(unittest.TestCase):
         self.d.reconcile()
         self.assertEqual(self.d.calls,[('gate',False,'')])
 
+    def test_verified_restart_of_same_digest_does_not_recreate_container(self):
+        self.d.desired.return_value=A
+        self.d.state['verifiedBoot']='old'
+        self.d.reconcile()
+        self.d.stop.assert_not_called(); self.d.start.assert_not_called(); self.d.backup.assert_not_called()
+        self.assertEqual(self.d.state['verifiedBoot'],'boot')
+        self.assertEqual(self.d.calls[-1],('gate',True,A['commit']))
+
     def test_gate_atomic_write_is_readable_by_unprivileged_container(self):
         self.d.gate()
         p=self.d.root/'control/gate.json'

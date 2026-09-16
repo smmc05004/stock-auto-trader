@@ -29,7 +29,13 @@ describe("data recovery", () => {
     const broker = {orders:vi.fn(async()=>[]),positions:vi.fn(async()=>[]),submit:vi.fn(),cancel:vi.fn()};
     const config={start:"2026-09-14",end:"2026-09-25",fee:.000146527,enabled:true,cancellationVerified:true};
     try {
-      for (const s of samples()) store.db.prepare("INSERT INTO quotes VALUES(?,?,?,?,?)").run(s.at,s.bid,s.ask,s.bidSize,s.askSize);
+      // Seed the historical fixture atomically instead of 1,800 fsyncs on CI disks.
+      store.db.exec("BEGIN IMMEDIATE");
+      try {
+        const insert = store.db.prepare("INSERT INTO quotes VALUES(?,?,?,?,?)");
+        for (const s of samples()) insert.run(s.at,s.bid,s.ask,s.bidSize,s.askSize);
+        store.db.exec("COMMIT");
+      } catch (e) { store.db.exec("ROLLBACK"); throw e; }
       const engine = new RangeEngine(store,broker,config,()=>at);
       expect(engine.samples).toHaveLength(1800); expect(engine.latest).toBeUndefined();
       await engine.tick(); expect(broker.submit).not.toHaveBeenCalled();
