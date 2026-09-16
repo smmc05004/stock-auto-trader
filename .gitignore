@@ -11,3 +11,8 @@ data
 .vercel
 deploy/paper.env
 *.tsbuildinfo
+deploy/range.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite.*.bak

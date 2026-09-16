@@ -67,15 +67,24 @@ async function main() {
       const result = await broker.placeOrder({ symbol, side: action, type: "limit", quantity: 1, limitPrice: price });
       state[action] = { date: clock.date, status: result.accepted ? "accepted" : "rejected", price, orderId: result.orderId };
       await saveCycle(directory, state);
-      await report("order_result", { side: action, accepted: result.accepted, orderId: result.orderId });
-    } catch {
+      await report("order_result", { side: action, accepted: result.accepted, orderId: result.orderId, message: result.message });
+    } catch (error) {
       state[action] = { date: clock.date, status: "unknown", price };
       await saveCycle(directory, state);
-      await report("order_unknown_manual_check_required");
+      await report("order_unknown_manual_check_required", {
+        message: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
       process.exitCode = 1;
     }
   });
 }
 
 const timeout = setTimeout(() => { console.error("Paper run timed out; check lock and broker orders before recovery."); process.exit(1); }, 90_000);
-main().catch(() => { console.error("Paper run blocked or failed; inspect configuration, journal and broker. No automatic retry of orders."); process.exitCode = 1; }).finally(() => clearTimeout(timeout));
+main().catch((error) => {
+  console.error(
+    "Paper run blocked or failed:",
+    error instanceof Error ? error.stack ?? error.message : String(error),
+  );
+  process.exitCode = 1;
+}).finally(() => clearTimeout(timeout));

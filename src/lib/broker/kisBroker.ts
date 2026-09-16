@@ -185,7 +185,16 @@ function getOrderUnitPrice(order: OrderRequest) {
     return "0";
   }
 
-  return String(order.limitPrice ?? 0);
+  const price = order.limitPrice ?? 0;
+  const tick = price < 2_000 ? 1
+    : price < 5_000 ? 5
+      : price < 20_000 ? 10
+        : price < 50_000 ? 50
+          : price < 200_000 ? 100
+            : price < 500_000 ? 500
+              : price < 1_000_000 ? 1_000
+                : price < 2_000_000 ? 2_000 : 5_000;
+  return String(Math.floor(price / tick) * tick);
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -494,24 +503,25 @@ export class KisBrokerClient implements BrokerClient {
     return hashKey;
   }
 
-  private async getAccessToken() {
+  async getAccessToken(forceRefresh = false) {
     assertKisCredentials();
     const { appKey, appSecret } = getKisCredentials();
     const cachedToken = getTokenCache();
 
-    if (isUsableTokenCache(cachedToken)) {
+    if (!forceRefresh && isUsableTokenCache(cachedToken)) {
       return cachedToken.accessToken;
     }
 
     const storedToken = await readTokenCacheFile();
 
-    if (storedToken) {
+    if (!forceRefresh && storedToken) {
       setTokenCache(storedToken);
       return storedToken.accessToken;
     }
 
     const response = await fetch(new URL("/oauth2/tokenP", this.baseUrl), {
       method: "POST",
+      signal: AbortSignal.timeout(15_000),
       headers: {
         "Content-Type": "application/json; charset=utf-8",
       },
