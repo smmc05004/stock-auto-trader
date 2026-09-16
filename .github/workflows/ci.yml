@@ -6,6 +6,9 @@ on:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -26,6 +29,16 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Test deployment failure paths
+        run: python3 -m unittest discover -s tests/deploy -v
+
+      - name: Validate AWS installation template
+        run: |
+          python3 -m venv /tmp/cfn-check
+          /tmp/cfn-check/bin/pip install cfn-lint==1.56.3
+          /tmp/cfn-check/bin/cfn-lint deploy/image/infrastructure.json
+          bash -n deploy/image/install.sh
+
       - name: Run lint
         run: npm run lint
 
@@ -34,3 +47,58 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  image:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build immutable Linux image
+        env:
+          COMMIT: ${{ github.sha }}
+        run: docker build --platform linux/amd64 --build-arg GIT_COMMIT="$COMMIT" -f Dockerfile.paper -t paper-ci .
+      - name: Test image with no broker access
+        run: docker run --rm --network none --read-only --tmpfs /app/data:uid=1000,gid=1000 paper-ci node image-smoke.mjs
+      - name: Save tested image
+        if: github.event_name == 'push'
+        run: docker save paper-ci -o /tmp/paper-image.tar
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: github.event_name == 'push'
+        with:
+          name: paper-image
+          path: /tmp/paper-image.tar
+          retention-days: 1
+
+  publish-deploy:
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.PAPER_IMAGE_CD_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: paper-ec2-deployment
+      cancel-in-progress: false
+    env:
+      AWS_REGION: ap-northeast-2
+      ECR_REPOSITORY: ${{ vars.PAPER_ECR_REPOSITORY }}
+      DESIRED_PARAMETER: ${{ vars.PAPER_DESIRED_PARAMETER }}
+      STATUS_PARAMETER: ${{ vars.PAPER_STATUS_PARAMETER }}
+      INSTANCE_ID: ${{ vars.PAPER_EC2_INSTANCE_ID }}
+      SSM_DOCUMENT: ${{ vars.PAPER_SSM_DOCUMENT }}
+      COMMIT: ${{ github.sha }}
+      RELEASE_ID: ${{ github.run_number }}-${{ github.run_attempt }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: paper-image
+          path: /tmp/image
+      - uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502
+        with:
+          role-to-assume: ${{ vars.PAPER_DEPLOY_ROLE_ARN }}
+          aws-region: ap-northeast-2
+      - name: Publish tested image and request deployment
+        run: python3 deploy/image/publish.py

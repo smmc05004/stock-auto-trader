@@ -23,6 +23,7 @@ export class RangeEngine {
   latest?: Sample;
   lastTrade = 0;
   shutdown = false;
+  entryAllowed: () => boolean = () => true;
   constructor(readonly store: RangeStore, readonly broker: Broker, readonly config: Config, readonly clock = Date.now) {
     validateConfig(config);
     const hash = createHash("sha256").update(JSON.stringify({ ...config, version: VERSION })).digest("hex");
@@ -126,6 +127,7 @@ export class RangeEngine {
   }
   async submit(side: "buy" | "sell", qty: number, price: number | null, leg: number) {
     const s = this.state;
+    if (side === "buy" && !this.entryAllowed()) return;
     if (s.halted || !this.config.enabled) throw new Error("Orders disabled or halted");
     if (!this.strategyArmed() && s.preflight?.status !== "running") throw new Error("Cancellation preflight not passed");
     if (side === "sell" && (qty > s.quantity || qty + s.orders.filter(o => o.side === "sell" && !o.terminal).reduce((n, o) => n + o.remaining, 0) > s.quantity)) throw new Error("Oversell prevented");
@@ -201,6 +203,7 @@ export class RangeEngine {
       }
       this.save(); return;
     }
+    if (!this.entryAllowed()) { this.save(); return; }
     if (Math.floor(now / 60_000) === Math.floor(s.lastEval / 60_000)) { this.save(); return; }
     s.lastEval = now;
     if (k.date < this.config.start || k.date > this.config.end || k.weekday === 0 || k.weekday === 6 || k.minute < 540 || k.minute >= 915 || this.shutdown) { this.block("outside_experiment_session"); this.save(); return; }
