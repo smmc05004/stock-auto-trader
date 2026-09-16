@@ -2,7 +2,7 @@
 
 ## 상태
 
-2026-09-16: 저장소에 CI 이미지 검증·ECR 발행·SSM 배포 요청, 서버 배포 제어기, 주문 진입 제어, CloudFormation 템플릿과 테스트를 추가했다. **실제 AWS 리소스 생성·인스턴스 역할 연결·서버 최초 설치·실서버 이미지 전환 검증은 아직 완료되지 않았다.**
+2026-09-16: 저장소에 CI 이미지 검증·ECR 발행·SSM 배포 요청, 서버 배포 제어기, 주문 진입 제어, CloudFormation 템플릿과 테스트를 추가했다. **13:52 KST에 AWS·역할·SSM 연결, 서버 설치 및 최초 이미지 배포 검증을 완료했다.** 아래 최초 설정 절차는 신규 설치용이며 기존 서버에서 반복 실행하지 않는다.
 
 `PAPER_IMAGE_CD_ENABLED=true`가 없는 동안 PR/main CI는 검사와 이미지 빌드까지만 수행한다. 따라서 이 PR 머지만으로 기존 EC2 실행기를 교체하지 않는다. 실제 활성화 결과는 이 문서에 추가 기록한다.
 
@@ -89,6 +89,19 @@ GitHub 작업은 오프라인/대기 상태를 Summary에 명시하고 종료할
 
 자동 테스트: 신규 매수 차단/매도 유지, 인가 만료·부팅 변경, 배포 중 계좌 대조, 안전 상태 대기, 오프라인, 이전 버전 우선 복구, 연속 릴리스, 종료 실패, 롤백, 중간 장애, 발행 후 superseded 상태 및 업로드/적용 구분.
 
-실환경 인수(최초 설치 후 기록): ECR push/pull, 실제 OIDC 역할 가정, SSM 연결, 단일 실행기·원장 보존, 장외 정상 교체, 실패 복구, 서버 중지 중 머지 및 IP 변경 후 재시작. 현재는 미실행이다.
+실환경 인수(최초 설치 후 기록): ECR push/pull, 실제 OIDC 역할 가정, SSM 연결, 단일 실행기·원장 보존, 장외 정상 교체, 실패 복구, 서버 중지 중 머지 및 IP 변경 후 재시작. 최초 정상 배포와 원장 보존은 아래 기록대로 확인했다. 실서버 실패 복구·오프라인 머지·재부팅 인수는 아직 미실행이다.
 
 로컬 검증 결과(2026-09-16): Vitest 75개 및 Python 21개 통과, ESLint·TypeScript·paper/Next 빌드 통과, cfn-lint 1.56.3 및 YAML/쉘 문법 검사 통과. PR: https://github.com/smmc05004/stock-auto-trader/pull/2 . PR CI는 최종 커밋의 결과를 확인한다.
+
+
+## 7. 2026-09-16 최초 전환 결과
+
+- 사용자 요청으로 장중 전환했다. 최신 계좌 대조에서 보유·미체결 0 확인, 일관된 SQLite 백업, SIGTERM 정상 종료(exit 0), 종료 후 원장 flat 재확인과 최종 백업 순으로 진행했다. 강제 종료와 DB 덮어쓰기는 하지 않았다.
+- 설치 제어 파일: 머지된 `806a309`의 `deploy/image/` 묶음. 최신 앱 `bec225b`와 제어 파일 변경 없음 확인. archive SHA256 `1ea4a92def8cf00922a2f1f093192bf1db6ea14e29d29bf1ed9c622f45e4c3d9`.
+- 호스트 `/opt/stock-range-deploy`, 설정 `/etc/stock-range`(env 600), 기존 볼륨 `stock-auto-trader_range-data` 유지. 이전 서비스와 자동 재시작 비활성화, `stock-range-reconcile.timer` 활성화.
+- 비공개 복구 백업·이전 컨테이너 설정: `/var/lib/stock-range-migration/`(700). 최종 전환 전 DB: `stopped-before-image.sqlite`. 컨테이너 설정에는 비밀정보가 있으므로 출력·공유하지 않는다.
+- `PAPER_IMAGE_CD_ENABLED=true`. PR #3의 main 커밋 `bec225b61bfdcd3fb50b1ad2758b3788effc77db`에 대해 [CI 실행 35056983516, attempt 2](https://github.com/smmc05004/stock-auto-trader/actions/runs/35056983516)에서 verify/image/publish-deploy 모두 통과.
+- 릴리스 `11-2`, 실행 digest `sha256:67a4ebf06ede58aaa2a49b89e8452e6e56f6824932e3564873bde4f26b468c13`. ECR repository는 스택 Output과 동일. OIDC 역할 가정, ECR 발행·pull, SSM 명령·상태 기록, 실제 컨테이너 커밋/digest 일치를 확인했다.
+- 보고서: `revision=evaluation-clock-20260916`, `status=running`, `deployment.allowed=true`, `ordersArmed=true`, 보유 0·주문 없음. 실현손익 -11.79395823원 유지. 백업 대비 quotes 37,932→37,968, events 12,648→12,667로 과거 기록 보존 확인.
+- 전환으로 생긴 시세 공백 약 203초 때문에 `data_gap_30m` 대기. 추가 공백이 없을 때 약 14:22 KST 해제 예상. 주문 허가와 실제 체결·전략 데이터 준비는 별개다. 조회 지연 수정의 연속 30분 운영 검증은 이후 확인해야 한다.
+- 이후 main 머지부터 자동 이미지 배포 대상이다. 이 기록 자체의 PR은 운영 문서 갱신이며 추가 서버 전환을 의미하지 않는다.

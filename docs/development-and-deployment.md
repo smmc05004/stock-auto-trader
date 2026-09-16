@@ -8,11 +8,11 @@
 |---|---|---|
 | 개발 흐름 | 작업 브랜치·커밋·PR 규약 및 AI 진입 문서 | main 보호 적용: PR 필수, verify·image 필수, 관리자 포함 |
 | CI 및 이미지 | 검사 후 Linux amd64 이미지 빌드·격리 smoke 검사 | PR CI 결과로 확인 |
-| 발행·배포 요청 | 검사한 이미지를 artifact로 전달, ECR digest 발행, SSM 호출 | AWS 권한/변수 설정 및 활성화 필요 |
-| AWS 설치 | `deploy/image/infrastructure.json` ECR·OIDC·IAM·SSM 템플릿 | 실제 스택 생성 미실행 |
-| 주문 중 교체 | 파일 기반 신규 매수 허가·최신 계좌 대조·단일 실행기 교체 | 자동 테스트 완료, EC2 인수 미실행 |
-| 부팅·복구 | 목표 버전 확인 타이머·부팅별 허가·실패 릴리스 차단 | 서버 최초 설치 미실행 |
-| 이미지 롤백 | 주문 허가 전 실패한 후보의 직전 호환 이미지 복구 | 자동 테스트 완료, 최초 배포는 이전 ECR 버전 없음 |
+| 발행·배포 요청 | 검사한 이미지를 artifact로 전달, ECR digest 발행, SSM 호출 | 2026-09-16 OIDC·ECR·SSM 및 활성화 확인 |
+| AWS 설치 | `deploy/image/infrastructure.json` ECR·OIDC·IAM·SSM 템플릿 | stock-paper-images 스택 생성·역할 연결 확인 |
+| 주문 중 교체 | 파일 기반 신규 매수 허가·최신 계좌 대조·단일 실행기 교체 | 자동 테스트 완료; 최초 flat 전환 확인, 포지션 보유 중 교체 인수 미실행 |
+| 부팅·복구 | 목표 버전 확인 타이머·부팅별 허가·실패 릴리스 차단 | 서버 최초 설치·타이머 활성화 확인; 재부팅 인수 미실행 |
+| 이미지 롤백 | 주문 허가 전 실패한 후보의 직전 호환 이미지 복구 | 자동 테스트 완료; 최초 ECR 배포 완료, 실서버 롤백 인수 미실행 |
 
 상세 설치·활성화·제한은 [EC2 이미지 자동 배포 운영](image-deployment-operations.md)을 읽는다. `PAPER_IMAGE_CD_ENABLED=true` 설정 전에는 기존 서버에 적용되지 않는다. 과거 수동 배포 기록은 `git-deployment-process.md` 등에서 확인하되 새 표준과 혼동하지 않는다.
 
@@ -90,3 +90,5 @@
 - [AWS: ECR 이미지 다운로드](https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-pull-ecr-image.html)
 - [AWS: Systems Manager Run Command](https://docs.aws.amazon.com/systems-manager/latest/userguide/run-command.html)
 - [AWS: Parameter Store](https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html)
+
+2026-09-16 13:52 KST 최초 실환경 이미지 전환·자동 배포 완료. 실행 커밋·digest·백업 및 미검증 항목은 [운영 검증 기록](image-deployment-operations.md#7-2026-09-16-최초-전환-결과)을 따른다.
