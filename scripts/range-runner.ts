@@ -19,6 +19,7 @@ store.claim();
 const broker = new RangeBroker(), engine = new RangeEngine(store, broker, config);
 const shadow = new ShadowComparison(store, config.fee);
 const revision = "feed-recovery-20260916";
+const gitCommit = process.env.APP_GIT_COMMIT ?? "unknown";
 shadow.invalidate("process_restart");
 let lastError = "", stopping = false, lastShadowSecond = 0;
 const feed = new FeedController(broker.connect.bind(broker), s => {
@@ -46,7 +47,7 @@ function report() {
     !engine.strategyArmed() ? "orders_not_armed" : day < 3 ? "observation_or_preflight_day" :
     s.exiting || s.streak >= 3 || s.boxes >= 30 || now - s.lastEnd < 60_000 ? "risk_limit_or_cooldown" :
     signal.box && (s.counts[`${signal.box.low}:${signal.box.high}`] ?? 0) >= 2 ? "box_reentry_limit" : signal.reason));
-  return { revision, marketData: quality, feed: feed.snapshot(), entryBlockReason, version: VERSION, mode: "KIS PAPER ONLY", config, day: s.days.indexOf(korea(Date.now()).date) + 1,
+  return { gitCommit, revision, marketData: quality, feed: feed.snapshot(), entryBlockReason, version: VERSION, mode: "KIS PAPER ONLY", config, day: s.days.indexOf(korea(Date.now()).date) + 1,
     status: s.halted ?? (lastError || "running"), safeToStop: s.safeToStop && Date.now() - s.lastSync < 60_000,
     ordersArmed: engine.strategyArmed(),
     warmupSamples: engine.samples.length, quoteAgeMs: quote ? Date.now() - quote.at : null,
@@ -58,7 +59,7 @@ const server = createServer((req, res) => {
   if (req.method !== "GET") { res.writeHead(405).end(); return; }
   const url = new URL(req.url ?? "/", "http://localhost");
   res.setHeader("Cache-Control", "no-store"); res.setHeader("X-Content-Type-Options", "nosniff");
-  if (url.pathname === "/health") { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ ok: true, version: VERSION, heartbeat: store.db.prepare("SELECT expires FROM lease WHERE id=1").get() })); return; }
+  if (url.pathname === "/health") { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ ok: true, version: VERSION, gitCommit, heartbeat: store.db.prepare("SELECT expires FROM lease WHERE id=1").get() })); return; }
   if (url.pathname === "/report.json") { res.setHeader("Content-Type", "application/json; charset=utf-8"); res.end(JSON.stringify(report())); return; }
   if (url.pathname === "/events.csv") {
     const date = url.searchParams.get("date") ?? korea(Date.now()).date;
@@ -72,13 +73,13 @@ const server = createServer((req, res) => {
   const r = report();
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'");
-  res.end(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>모의 구간 매매</title><style>body{font:16px system-ui;max-width:1050px;margin:32px auto;padding:20px;background:#101722;color:#edf4ff}a{color:#87c9ff}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#192536;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #456;text-align:left}</style><h1>KODEX 코스닥150 · 모의투자</h1><p>${escape(VERSION)} · ${escape(r.day)}일차 · 주문 ${r.ordersArmed ? "활성" : "비활성(관찰)"}</p><p>진입 판단: ${escape(r.entryBlockReason)} · 최근 30분 ${r.marketData.samples30m}개 / 5분 ${r.marketData.samples5m}개 · 최대 공백 ${r.marketData.maxGapMs}ms · 연결 시도 ${r.feed.attempts}</p><p>상태: ${escape(r.status)} / 종료 확인: ${r.safeToStop ? "보유·미체결 없음" : "종료 확인 필요"}</p><p>추정 자산 ${r.estimatedEquity.toFixed(0)}원 · 실현손익 ${r.state.realized.toFixed(0)}원 · 보유 ${r.state.quantity}주 · 준비 표본 ${r.warmupSamples}/1800</p><p>${escape(r.note)}</p><p><a href="/events.csv">오늘 CSV</a> · <a href="/report.json">전체 상태 JSON</a></p><h2>현재 주문</h2><pre>${escape(JSON.stringify(r.state.orders, null, 2))}</pre><h2>진입 제외 사유</h2><pre>${escape(JSON.stringify(r.state.counts, null, 2))}</pre><h2>최근 기록</h2><table><tr><th>시각(KST)</th><th>이벤트</th><th>내용</th></tr>${r.recentEvents.map(e => `<tr><td>${escape(new Date(Number(e.at)).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }))}</td><td>${escape(e.kind)}</td><td>${escape(e.payload)}</td></tr>`).join("")}</table></html>`);
+  res.end(`<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="refresh" content="15"><title>모의 구간 매매</title><style>body{font:16px system-ui;max-width:1050px;margin:32px auto;padding:20px;background:#101722;color:#edf4ff}a{color:#87c9ff}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#192536;padding:16px}table{width:100%;border-collapse:collapse}td,th{padding:8px;border-bottom:1px solid #456;text-align:left}</style><h1>KODEX 코스닥150 · 모의투자</h1><p>배포 커밋: ${escape(gitCommit)}</p><p>${escape(VERSION)} · ${escape(r.day)}일차 · 주문 ${r.ordersArmed ? "활성" : "비활성(관찰)"}</p><p>진입 판단: ${escape(r.entryBlockReason)} · 최근 30분 ${r.marketData.samples30m}개 / 5분 ${r.marketData.samples5m}개 · 최대 공백 ${r.marketData.maxGapMs}ms · 연결 시도 ${r.feed.attempts}</p><p>상태: ${escape(r.status)} / 종료 확인: ${r.safeToStop ? "보유·미체결 없음" : "종료 확인 필요"}</p><p>추정 자산 ${r.estimatedEquity.toFixed(0)}원 · 실현손익 ${r.state.realized.toFixed(0)}원 · 보유 ${r.state.quantity}주 · 준비 표본 ${r.warmupSamples}/1800</p><p>${escape(r.note)}</p><p><a href="/events.csv">오늘 CSV</a> · <a href="/report.json">전체 상태 JSON</a></p><h2>현재 주문</h2><pre>${escape(JSON.stringify(r.state.orders, null, 2))}</pre><h2>진입 제외 사유</h2><pre>${escape(JSON.stringify(r.state.counts, null, 2))}</pre><h2>최근 기록</h2><table><tr><th>시각(KST)</th><th>이벤트</th><th>내용</th></tr>${r.recentEvents.map(e => `<tr><td>${escape(new Date(Number(e.at)).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" }))}</td><td>${escape(e.kind)}</td><td>${escape(e.payload)}</td></tr>`).join("")}</table></html>`);
 });
 server.listen(8787, "0.0.0.0");
 const heartbeat = setInterval(() => { try { store.heartbeat(); } catch { process.exit(2); } }, 10_000);
 for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => { stopping = true; engine.shutdown = true; });
 async function run() {
-  store.event("runner_started", { version: VERSION, revision, config });
+  store.event("runner_started", { version: VERSION, revision, gitCommit, config });
   while (true) {
     const now = Date.now(), k = korea(now), inExperiment = k.date >= config.start && k.date <= config.end;
     try {
