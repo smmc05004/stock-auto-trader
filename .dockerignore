@@ -1,0 +1,11 @@
+**
+!package.json
+!package-lock.json
+!tsconfig.json
+!src/
+!src/lib/
+!src/lib/**
+!scripts/
+!scripts/**
+!Dockerfile.paper
+**/*.test.ts

@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { dailyOrderSchema, buyingPowerSchema, minuteBarSchema, type PaperDailyOrder } from "./paperOrders";
 import { env } from "@/lib/config/env";
 import type { BrokerClient, BrokerStatus } from "@/lib/broker/broker";
 import type {
@@ -183,7 +185,16 @@ function getOrderUnitPrice(order: OrderRequest) {
     return "0";
   }
 
-  return String(order.limitPrice ?? 0);
+  const price = order.limitPrice ?? 0;
+  const tick = price < 2_000 ? 1
+    : price < 5_000 ? 5
+      : price < 20_000 ? 10
+        : price < 50_000 ? 50
+          : price < 200_000 ? 100
+            : price < 500_000 ? 500
+              : price < 1_000_000 ? 1_000
+                : price < 2_000_000 ? 2_000 : 5_000;
+  return String(Math.floor(price / tick) * tick);
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {
@@ -208,6 +219,67 @@ async function readJsonResponse<T>(response: Response): Promise<T> {
 
 export class KisBrokerClient implements BrokerClient {
   private readonly baseUrl = getKisBaseUrl();
+
+  private async paperGet(endpoint: string, trId: string, parameters: Record<string, string>, continuation?: string) {
+    if (env.TRADING_MODE !== "paper" || env.ALLOW_LIVE_TRADING || env.KIS_BASE_URL) {
+      throw new Error("Paper account queries require the standard paper environment.");
+    }
+    const token = await this.getAccessToken();
+    const { appKey, appSecret } = getKisCredentials();
+    const url = new URL(endpoint, this.baseUrl);
+    for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
+    await delay(1100);
+    const response = await fetch(url, {
+      headers: { authorization: `Bearer ${token}`, appkey: appKey ?? "", appsecret: appSecret ?? "",
+        tr_id: trId, custtype: "P", ...(continuation ? { tr_cont: continuation } : {}) },
+      signal: AbortSignal.timeout(15_000), cache: "no-store",
+    });
+    const data = await readJsonResponse<Record<string, unknown>>(response);
+    if (data.rt_cd !== "0") throw new Error(`Paper query failed: ${String(data.msg_cd ?? "unknown")}`);
+    return { data, more: ["F", "M"].includes(response.headers.get("tr_cont") ?? "") };
+  }
+
+  async getPaperDailyOrders(startDate: string, endDate: string): Promise<PaperDailyOrder[]> {
+    const { accountNo, productCode } = getAccountParts();
+    const orders: PaperDailyOrder[] = [];
+    let fk = "", nk = "";
+    for (let page = 0; page < 20; page++) {
+      const { data, more } = await this.paperGet("/uapi/domestic-stock/v1/trading/inquire-daily-ccld", "VTTC0081R", {
+        CANO: accountNo, ACNT_PRDT_CD: productCode, INQR_STRT_DT: startDate, INQR_END_DT: endDate,
+        SLL_BUY_DVSN_CD: "00", PDNO: "", CCLD_DVSN: "00", INQR_DVSN: "00", INQR_DVSN_3: "00",
+        ORD_GNO_BRNO: "", ODNO: "", INQR_DVSN_1: "", CTX_AREA_FK100: fk, CTX_AREA_NK100: nk,
+      }, page ? "N" : undefined);
+      if (!Array.isArray(data.output1)) throw new Error("Missing daily orders output.");
+      orders.push(...data.output1.map((row) => dailyOrderSchema.parse(row)));
+      if (!more) return orders;
+      const nextFk = String(data.ctx_area_fk100 ?? ""), nextNk = String(data.ctx_area_nk100 ?? "");
+      if (nextFk === fk && nextNk === nk) throw new Error("Repeated daily orders cursor.");
+      fk = nextFk; nk = nextNk;
+    }
+    throw new Error("Daily orders pagination exceeded its limit.");
+  }
+
+  async getPaperBuyingPower(symbol: string, price: number) {
+    const { accountNo, productCode } = getAccountParts();
+    const { data } = await this.paperGet("/uapi/domestic-stock/v1/trading/inquire-psbl-order", "VTTC8908R", {
+      CANO: accountNo, ACNT_PRDT_CD: productCode, PDNO: symbol, ORD_UNPR: String(price),
+      ORD_DVSN: "01", CMA_EVLU_AMT_ICLD_YN: "N", OVRS_ICLD_YN: "N",
+    });
+    return buyingPowerSchema.parse(data.output);
+  }
+
+  async getPaperLatestBar(symbol: string, hour: string) {
+    const { data } = await this.paperGet("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
+      FID_COND_MRKT_DIV_CODE: "J", FID_INPUT_ISCD: symbol, FID_INPUT_HOUR_1: hour,
+      FID_PW_DATA_INCU_YN: "N", FID_ETC_CLS_CODE: "",
+    });
+    if (!Array.isArray(data.output2) || !data.output2.length) throw new Error("No recent trading bars.");
+    const bars = data.output2.map((row) => minuteBarSchema.parse(row))
+      .filter((bar) => bar.cntg_vol > 0 && bar.stck_cntg_hour.slice(0, 4) < hour.slice(0, 4))
+      .sort((a, b) => `${b.stck_bsop_date}${b.stck_cntg_hour}`.localeCompare(`${a.stck_bsop_date}${a.stck_cntg_hour}`));
+    if (!bars.length) throw new Error("No completed bar with trading volume.");
+    return bars[0];
+  }
 
   async getStatus(): Promise<BrokerStatus> {
     try {
@@ -365,6 +437,8 @@ export class KisBrokerClient implements BrokerClient {
       CTAC_TLNO: "",
       SLL_TYPE: order.side === "sell" ? "01" : undefined,
       ALGO_NO: "",
+      EXCG_ID_DVSN_CD: "KRX",
+      CNDT_PRIC: "",
     };
     const hashKey = await this.createHashKey(body);
     const response = await fetch(new URL("/uapi/domestic-stock/v1/trading/order-cash", this.baseUrl), {
@@ -401,7 +475,7 @@ export class KisBrokerClient implements BrokerClient {
       return order.side === "buy" ? "TTTC0802U" : "TTTC0801U";
     }
 
-    return order.side === "buy" ? "VTTC0802U" : "VTTC0801U";
+    return order.side === "buy" ? "VTTC0012U" : "VTTC0011U";
   }
 
   private async createHashKey(body: Record<string, string | undefined>) {
@@ -429,24 +503,25 @@ export class KisBrokerClient implements BrokerClient {
     return hashKey;
   }
 
-  private async getAccessToken() {
+  async getAccessToken(forceRefresh = false) {
     assertKisCredentials();
     const { appKey, appSecret } = getKisCredentials();
     const cachedToken = getTokenCache();
 
-    if (isUsableTokenCache(cachedToken)) {
+    if (!forceRefresh && isUsableTokenCache(cachedToken)) {
       return cachedToken.accessToken;
     }
 
     const storedToken = await readTokenCacheFile();
 
-    if (storedToken) {
+    if (!forceRefresh && storedToken) {
       setTokenCache(storedToken);
       return storedToken.accessToken;
     }
 
     const response = await fetch(new URL("/oauth2/tokenP", this.baseUrl), {
       method: "POST",
+      signal: AbortSignal.timeout(15_000),
       headers: {
         "Content-Type": "application/json; charset=utf-8",
       },

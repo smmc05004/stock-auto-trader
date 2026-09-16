@@ -1,0 +1,15 @@
+[Unit]
+Description=KIS paper range experiment
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/home/ubuntu/stock-auto-trader
+ExecStart=/usr/bin/docker compose -f compose.range.yaml up -d --no-build
+ExecStop=/usr/bin/docker compose -f compose.range.yaml stop
+TimeoutStopSec=200
+
+[Install]
+WantedBy=multi-user.target

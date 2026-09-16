@@ -9,3 +9,14 @@ coverage
 ROADMAP.md
 data
 .vercel
+deploy/paper.env
+*.tsbuildinfo
+deploy/range.env
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite.*.bak
+
+# Server-only credential backups
+deploy/*.env.*
+!deploy/*.env.example
