@@ -124,6 +124,37 @@ describe("journal and lifecycle", () => {
     broker.orders.mockResolvedValue([{...remote("buy",1),remaining:0,cancelled:true}]); broker.submit.mockResolvedValue({id:"456",org:"001"});
     await engine.tick(); expect(broker.submit).toHaveBeenCalledWith("sell",1,null);
   });
+  it("does not stop out a box that never filled, and records the quote behind a real stop", async () => {
+    const {engine, broker} = fixture(); const data = samples();
+    engine.state.active = makeBox(data, at, "A", config.fee).box;
+    const stop = engine.state.active!.stop;
+    engine.state.date = "2026-09-15"; engine.samples = data; engine.lastTrade = at;
+    // Price is at the stop but nothing was ever bought: the box must not be labelled a stop loss.
+    engine.latest = { at, bid: stop, ask: stop + 5, bidSize: 100, askSize: 100 };
+    engine.state.orders.push(local("buy"));
+    broker.orders.mockResolvedValue([remote("buy", 0)]);
+    await engine.tick();
+    expect(engine.state.exiting).not.toBe("stop_loss");
+
+    // Same price once the position exists: now it is a stop loss, and it carries its evidence.
+    engine.state.quantity = 1; engine.state.basis = 14000;
+    broker.positions.mockResolvedValue([{symbol:"229200",qty:1}]);
+    await engine.tick();
+    expect(engine.state.exiting).toBe("stop_loss");
+    expect(engine.state.exitEvidence).toMatchObject({ reason: "stop_loss", bid: stop, stop, quantity: 1 });
+    expect(engine.state.exitEvidence!.quoteAt).toBe(at);
+  });
+  it("emits exit_triggered once per reason and clears the evidence with the box", async () => {
+    const {engine, store} = fixture();
+    engine.state.active = makeBox(samples(), at, "A", config.fee).box;
+    engine.exit("stale_feed"); engine.exit("stale_feed"); engine.exit("session_end");
+    const kinds = store.db.prepare("SELECT payload FROM events WHERE kind='exit_triggered' ORDER BY rowid").all();
+    expect(kinds.map(r => JSON.parse(String(r.payload)).reason)).toEqual(["stale_feed", "session_end"]);
+    expect(engine.state.exiting).toBe("session_end");
+    engine.clearExit();
+    expect(engine.state.exiting).toBeUndefined();
+    expect(engine.state.exitEvidence).toBeUndefined();
+  });
 });
 
 describe("linked cancellation evidence", () => {
