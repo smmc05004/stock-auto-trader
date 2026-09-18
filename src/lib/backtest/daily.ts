@@ -1,5 +1,5 @@
 import { simpleMovingAverage, barsUsable, type DailyBar } from "@/lib/marketData/bars";
-import { applySlippage, tradeCost, type CostModel, type InstrumentClass, type TradeCost } from "./cost";
+import { applySlippage, resolveSchedule, tradeCost, type CostModel, type InstrumentClass, type TradeCost } from "./cost";
 
 /**
  * 일봉 백테스트. 신호는 확정 종가로만 만들고 체결은 다음 거래일 시가로 한다.
@@ -34,7 +34,8 @@ export type DailyBacktestInput = {
   bars: DailyBar[];
   strategy: DailyStrategy;
   costModel: CostModel;
-  commissionRate: number;
+  /** Optional fixed override; omit to use the dated commission in costModel. */
+  commissionRate?: number;
   instrument: InstrumentClass;
   tickSize: number;
   initialCash: number;
@@ -42,6 +43,9 @@ export type DailyBacktestInput = {
   warmupBars: number;
   slippageTicks?: number;
   datasetVersion?: string;
+  /** Evaluation window. Earlier bars warm up the strategy but create no positions or P&L. */
+  evaluationStartDate?: string;
+  evaluationEndDate?: string;
 };
 
 function drawdownAndRecovery(curve: { date: string; equity: number }[]) {
@@ -60,9 +64,17 @@ function drawdownAndRecovery(curve: { date: string; equity: number }[]) {
 }
 
 export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult {
-  const { bars, strategy, costModel, commissionRate, instrument, tickSize, initialCash, warmupBars, slippageTicks = 1, datasetVersion = "" } = input;
+  const {
+    bars, strategy, costModel, commissionRate, instrument, tickSize, initialCash, warmupBars,
+    slippageTicks = 1, datasetVersion = "", evaluationStartDate, evaluationEndDate,
+  } = input;
   const usable = barsUsable(bars, warmupBars + 1);
   if (!usable.usable) throw new Error(`Unusable bars: ${usable.reason} (${usable.issues.length} issues)`);
+  if (evaluationStartDate && evaluationEndDate && evaluationStartDate > evaluationEndDate) throw new Error("evaluationStartDate must not be after evaluationEndDate");
+  const firstEvaluationIndex = evaluationStartDate ? bars.findIndex(b => b.date >= evaluationStartDate) : 0;
+  const firstBarAfterEnd = evaluationEndDate ? bars.findIndex(b => b.date > evaluationEndDate) : -1;
+  const lastIndex = firstBarAfterEnd < 0 ? bars.length - 1 : firstBarAfterEnd - 1;
+  if (firstEvaluationIndex < 0 || firstEvaluationIndex > lastIndex) throw new Error("Evaluation window contains no bars");
 
   let cash = initialCash, quantity = 0, basis = 0, realized = 0, costTotal = 0, turnoverAmount = 0;
   const fills: DailyFill[] = [];
@@ -74,17 +86,19 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
 
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
+    if (i > lastIndex) break;
 
-    if (pending) {
+    if (pending && i >= firstEvaluationIndex) {
       const equity = cash + quantity * bar.open;
+      const barCommissionRate = commissionRate ?? resolveSchedule(costModel, instrument, bar.date).commissionRate;
       // 수량은 슬리피지까지 반영한 예상 체결가로 계산한다. 시가로 계산하면 매수가 현금을 넘긴다.
       const sizingPrice = applySlippage(bar.open, "buy", tickSize, slippageTicks);
-      const targetQuantity = Math.floor(equity * pending.targetWeight / (sizingPrice * (1 + commissionRate)));
+      const targetQuantity = Math.floor(equity * pending.targetWeight / (sizingPrice * (1 + barCommissionRate)));
       const delta = targetQuantity - quantity;
       if (delta !== 0) {
         const side = delta > 0 ? "buy" : "sell";
         const size = Math.abs(delta);
-        const cost = tradeCost(costModel, { side, price: bar.open, quantity: size, instrument, date: bar.date, tickSize, slippageTicks }, commissionRate);
+        const cost = tradeCost(costModel, { side, price: bar.open, quantity: size, instrument, date: bar.date, tickSize, slippageTicks }, barCommissionRate);
         const affordable = side === "buy" ? cash + cost.cashDelta >= 0 : size <= quantity;
         if (affordable) {
           if (side === "buy") { basis += cost.grossAmount + cost.commission; quantity += size; }
@@ -105,17 +119,19 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
     // 방금 마감된 봉까지가 확정 이력이다. 체결은 다음 봉 시가이므로 미래 정보가 아니다.
     const history = bars.slice(0, i + 1);
     const equity = cash + quantity * bar.close;
-    curve.push({ date: bar.date, equity });
-    exposures.push(equity > 0 ? (quantity * bar.close) / equity : 0);
+    if (i >= firstEvaluationIndex) {
+      curve.push({ date: bar.date, equity });
+      exposures.push(equity > 0 ? (quantity * bar.close) / equity : 0);
+    }
 
-    if (history.length >= warmupBars && i < bars.length - 1) {
+    if (history.length >= warmupBars && i < lastIndex) {
       const signal = strategy.evaluate(history, { date: bar.date, equity, quantity });
       if (signal.targetWeight < 0 || signal.targetWeight > 1) throw new Error("targetWeight must be between 0 and 1");
       pending = { targetWeight: signal.targetWeight, reason: signal.reason };
     }
   }
 
-  const last = bars[bars.length - 1];
+  const last = bars[lastIndex];
   const finalEquity = cash + quantity * last.close;
   const monthly = new Map<string, MonthlyRow>();
   for (const point of curve) {
@@ -156,5 +172,38 @@ export function createTrendStrategy(options: { period: number; maxExposure: numb
       else if (close < sma * (1 - band)) held = false;
       return { targetWeight: held ? maxExposure : 0, reason: held ? "above_sma" : "below_sma" };
     },
+  };
+}
+
+/**
+ * Absolute momentum gate: hold only when the confirmed adjusted close exceeds
+ * its close from N observations ago. This is a research candidate, not a
+ * profitability claim. Evaluation occurs daily; unchanged targets do not trade.
+ */
+export function createAbsoluteMomentumStrategy(options: { lookback: number; maxExposure: number }): DailyStrategy {
+  const { lookback, maxExposure } = options;
+  if (!Number.isInteger(lookback) || lookback < 1) throw new Error("lookback must be a positive integer");
+  if (!(maxExposure >= 0 && maxExposure <= 1)) throw new Error("maxExposure must be between 0 and 1");
+  return {
+    name: `kr-etf-absolute-momentum-${lookback}`,
+    version: "v0.1",
+    evaluate(history) {
+      const latest = history.at(-1);
+      const reference = history.at(-1 - lookback);
+      if (!latest || !reference) return { targetWeight: 0, reason: "insufficient_history" };
+      const positive = latest.adjustedClose > reference.adjustedClose;
+      return { targetWeight: positive ? maxExposure : 0, reason: positive ? "positive_lookback_return" : "nonpositive_lookback_return" };
+    },
+  };
+}
+
+/** Passive comparator with a fixed target weight, using the same execution and cost model. */
+export function createBuyAndHoldStrategy(options: { targetWeight: number }): DailyStrategy {
+  const { targetWeight } = options;
+  if (!(targetWeight >= 0 && targetWeight <= 1)) throw new Error("targetWeight must be between 0 and 1");
+  return {
+    name: `buy-and-hold-${Math.round(targetWeight * 100)}pct`,
+    version: "v1",
+    evaluate: () => ({ targetWeight, reason: "fixed_target_weight" }),
   };
 }

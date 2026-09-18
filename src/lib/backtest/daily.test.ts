@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { KR_COST_MODEL_2026, applySlippage, resolveSchedule, roundTripCostRate, tradeCost, type CostModel } from "./cost";
 import { checkBars, simpleMovingAverage, type DailyBar } from "@/lib/marketData/bars";
-import { createTrendStrategy, runDailyBacktest } from "./daily";
+import { createAbsoluteMomentumStrategy, createBuyAndHoldStrategy, createTrendStrategy, runDailyBacktest } from "./daily";
 
 const model: CostModel = {
   version: "test",
@@ -121,6 +121,78 @@ describe("daily backtest", () => {
     const flat = runDailyBacktest({ ...base, bars: down, warmupBars: 10, strategy: createTrendStrategy({ period: 10, maxExposure: 0.6 }) });
     expect(flat.fills.filter(f => f.side === "buy")).toHaveLength(0);
     expect(flat.finalEquity).toBe(base.initialCash);
+  });
+
+  it("compares an absolute momentum gate and passive exposure through the same cost engine", () => {
+    const rising = series(40, i => 10_000 + i * 20);
+    const momentum = runDailyBacktest({
+      ...base, bars: rising, warmupBars: 10,
+      strategy: createAbsoluteMomentumStrategy({ lookback: 5, maxExposure: 0.6 }),
+    });
+    const passive = runDailyBacktest({
+      ...base, bars: rising, warmupBars: 10,
+      strategy: createBuyAndHoldStrategy({ targetWeight: 0.6 }),
+    });
+    expect(momentum.fills[0].date).toBe(rising[10].date);
+    expect(momentum.fills[0].side).toBe("buy");
+    expect(passive.fills[0].side).toBe("buy");
+    expect(momentum.strategy).not.toBe(passive.strategy);
+  });
+
+  it("warms up before an evaluation window without trading or counting pre-window returns", () => {
+    const bars = series(30, i => 10_000 + i * 100);
+    const start = bars[20].date;
+    const end = bars[25].date;
+    const result = runDailyBacktest({
+      ...base, bars, warmupBars: 10, evaluationStartDate: start, evaluationEndDate: end,
+      strategy: createAbsoluteMomentumStrategy({ lookback: 5, maxExposure: 0.6 }),
+    });
+    expect(result.fills[0].date).toBe(start);
+    expect(result.monthly).toHaveLength(1);
+    expect(result.monthly[0].endEquity).toBe(result.finalEquity);
+    const firstFill = result.fills[0];
+    expect(result.fills.every(fill => fill.date >= start && fill.date <= end)).toBe(true);
+    expect(result.finalEquity).toBeLessThan(1_000_000 + firstFill.quantity * (bars[25].close - firstFill.price));
+  });
+
+  it("rejects evaluation ranges that contain no observations", () => {
+    const bars = series(10, i => 10_000 + i);
+    expect(() => runDailyBacktest({
+      ...base, bars, warmupBars: 3, evaluationStartDate: "2027-01-01",
+      strategy: createBuyAndHoldStrategy({ targetWeight: 0.6 }),
+    })).toThrow(/Evaluation window contains no bars/);
+  });
+
+  it("uses the effective dated commission when the caller does not override it", () => {
+    const bars = series(8, () => 10_000);
+    const datedCosts: CostModel = {
+      version: "dated-fees",
+      schedules: {
+        domestic_equity_etf: [
+          { effectiveFrom: bars[0].date, commissionRate: 0.001, sellTaxRate: 0, basis: "first period" },
+          { effectiveFrom: bars[4].date, commissionRate: 0.002, sellTaxRate: 0, basis: "second period" },
+        ],
+      },
+    };
+    let calls = 0;
+    const result = runDailyBacktest({
+      bars, costModel: datedCosts, instrument: "domestic_equity_etf", tickSize: 5,
+      initialCash: 1_000_000, warmupBars: 3,
+      strategy: { name: "dated-fee-probe", version: "1", evaluate: () => ({ targetWeight: calls++ === 0 ? 0.6 : 0, reason: "probe" }) },
+    });
+    expect(result.fills).toHaveLength(2);
+    expect(result.fills[0].cost.commission).toBeCloseTo(result.fills[0].cost.grossAmount * 0.001, 6);
+    expect(result.fills[1].cost.commission).toBeCloseTo(result.fills[1].cost.grossAmount * 0.002, 6);
+  });
+
+  it("keeps absolute momentum in cash when the lookback return is nonpositive", () => {
+    const falling = series(30, i => 20_000 - i * 100);
+    const result = runDailyBacktest({
+      ...base, bars: falling, warmupBars: 10,
+      strategy: createAbsoluteMomentumStrategy({ lookback: 5, maxExposure: 0.6 }),
+    });
+    expect(result.fills.filter(fill => fill.side === "buy")).toHaveLength(0);
+    expect(result.finalEquity).toBe(base.initialCash);
   });
 
   it("reports monthly rows, drawdown and turnover", () => {

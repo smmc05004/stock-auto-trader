@@ -7,7 +7,8 @@ import { BarStore } from "../src/lib/marketData/store";
 import { collectDailyBars, type KisDailyRow } from "../src/lib/marketData/kis";
 import { checkBars } from "../src/lib/marketData/bars";
 
-const BASE = process.env.KIS_BASE_URL ?? "https://openapivts.koreainvestment.com:29443";
+// 빈 문자열도 미설정으로 본다. Compose와 .env.local이 KIS_BASE_URL을 빈 값으로 두는 경우가 있다.
+const BASE = process.env.KIS_BASE_URL || "https://openapivts.koreainvestment.com:29443";
 const APP_KEY = process.env.KIS_PAPER_APP_KEY ?? "";
 const APP_SECRET = process.env.KIS_PAPER_APP_SECRET ?? "";
 

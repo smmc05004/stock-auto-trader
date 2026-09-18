@@ -101,12 +101,13 @@ export function applySlippage(price: number, side: "buy" | "sell", tickSize: num
   return Math.max(rounded * tickSize, tickSize);
 }
 
-export function tradeCost(model: CostModel, input: TradeCostInput, commissionRate: number): TradeCost {
+export function tradeCost(model: CostModel, input: TradeCostInput, commissionOverride?: number): TradeCost {
   const { side, price, quantity, instrument, date, tickSize, slippageTicks = 1 } = input;
   if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("quantity must be a positive integer");
   if (!(price > 0)) throw new Error("price must be positive");
-  if (!(commissionRate >= 0) || commissionRate >= 0.01) throw new Error("commissionRate must be a plausible decimal rate");
   const schedule = resolveSchedule(model, instrument, date);
+  const commissionRate = commissionOverride ?? schedule.commissionRate;
+  if (!(commissionRate >= 0) || commissionRate >= 0.01) throw new Error("commissionRate must be a plausible decimal rate");
   const effectivePrice = applySlippage(price, side, tickSize, slippageTicks);
   const grossAmount = effectivePrice * quantity;
   const slippage = Math.abs(effectivePrice - price) * quantity;
