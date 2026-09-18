@@ -3,13 +3,14 @@
  * windows. This script never calls a broker or submits orders.
  *
  * npm run backtest:etf -- --db data/market/bars.sqlite
- *   --symbol 229200 --dataset <version> --commission-rate 0.0001 --sell-tax-rate 0
- *   --sell-tax-basis "verified source and effective period" --tick-size 5
+ *   --symbol 229200 --dataset <version> --cost-schedule /path/to/costs.json --tick-size 5
  *   --development-start 2016-01-01 --development-end 2021-12-31
  *   --selection-start 2022-01-01 --selection-end 2023-12-31
  *   --test-start 2024-01-01 --test-end 2026-09-18
  */
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { BarStore } from "../src/lib/marketData/store";
 import type { DailyBacktestResult } from "../src/lib/backtest/daily";
 import {
@@ -49,14 +50,19 @@ function main() {
   const db = arg("db");
   const symbol = arg("symbol");
   const datasetVersion = arg("dataset");
-  const commissionRate = Number(arg("commission-rate"));
-  if (!Number.isFinite(commissionRate) || commissionRate < 0 || commissionRate >= 0.005) {
-    throw new Error("--commission-rate must be a decimal rate from 0 (inclusive) to 0.005 (exclusive), so 2x cost stress remains valid");
+  const costSchedulePath = path.resolve(arg("cost-schedule"));
+  const costModel = JSON.parse(readFileSync(costSchedulePath, "utf8")) as CostModel;
+  const schedules = costModel.schedules?.domestic_equity_etf;
+  if (!costModel.version || !schedules?.length) throw new Error("Cost schedule must define version and domestic_equity_etf schedules");
+  const orderedSchedules = [...schedules].sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom));
+  if (new Set(orderedSchedules.map(s => s.effectiveFrom)).size !== orderedSchedules.length) {
+    throw new Error("Cost schedule effective dates must be unique");
   }
-  const sellTaxRate = Number(arg("sell-tax-rate"));
-  const sellTaxBasis = arg("sell-tax-basis");
-  if (!Number.isFinite(sellTaxRate) || sellTaxRate < 0 || sellTaxRate >= 0.01) {
-    throw new Error("--sell-tax-rate must be a decimal rate from 0 (inclusive) to 0.01 (exclusive)");
+  for (const schedule of orderedSchedules) {
+    date(schedule.effectiveFrom, "cost-schedule effectiveFrom");
+    if (!Number.isFinite(schedule.commissionRate) || schedule.commissionRate < 0 || schedule.commissionRate >= 0.005
+      || !Number.isFinite(schedule.sellTaxRate) || schedule.sellTaxRate < 0 || schedule.sellTaxRate >= 0.01
+      || !schedule.basis.trim()) throw new Error("Cost schedule contains an invalid rate or missing basis");
   }
   const windows: Window[] = [
     { name: "development", start: date(arg("development-start"), "development-start"), end: date(arg("development-end"), "development-end") },
@@ -76,10 +82,13 @@ function main() {
     if (!bars.length) throw new Error(`No bars stored for ${symbol}`);
     const selected = bars.filter(b => b.date <= windows[2].end);
     if (selected.length < lookbackWarmup + 2) throw new Error("Insufficient history for a 252-observation candidate");
+    if (orderedSchedules[0].effectiveFrom > selected[0].date) {
+      throw new Error("Cost schedule must cover the first observation; do not extrapolate a future rate backward implicitly");
+    }
     const dataHash = createHash("sha256").update(JSON.stringify(selected)).digest("hex");
     const scenarios = [
-      { name: "base", commissionRate, slippageTicks: 1 },
-      { name: "cost_stress_2x", commissionRate: commissionRate * 2, slippageTicks: 2 },
+      { name: "base", commissionMultiplier: 1, slippageTicks: 1 },
+      { name: "cost_stress_2x", commissionMultiplier: 2, slippageTicks: 2 },
     ];
     const strategies = [
       { id: "trend_120", make: () => createTrendStrategy({ period: 120, maxExposure: 0.6 }) },
@@ -90,21 +99,20 @@ function main() {
     const results = strategies.map(candidate => ({
       candidate: candidate.id,
       scenarios: scenarios.map(scenario => {
-        const costModel: CostModel = {
-          version: `caller-supplied-etf-cost-${scenario.name}`,
+        const scenarioCostModel: CostModel = {
+          version: `${costModel.version}-${scenario.name}`,
           schedules: {
-            domestic_equity_etf: [{
-              effectiveFrom: selected[0].date, commissionRate: scenario.commissionRate, sellTaxRate,
-              basis: `Caller supplied: ${sellTaxBasis}`,
-            }],
+            domestic_equity_etf: orderedSchedules.map(schedule => ({
+              ...schedule, commissionRate: schedule.commissionRate * scenario.commissionMultiplier,
+            })),
           },
         };
         return {
-          name: scenario.name, commissionRate: scenario.commissionRate, slippageTicks: scenario.slippageTicks,
+          name: scenario.name, effectiveCostSchedules: scenarioCostModel.schedules.domestic_equity_etf, slippageTicks: scenario.slippageTicks,
           windows: windows.map(window => {
             const result = runDailyBacktest({
-              bars: selected, strategy: candidate.make(), costModel,
-              commissionRate: scenario.commissionRate, instrument: "domestic_equity_etf", tickSize,
+              bars: selected, strategy: candidate.make(), costModel: scenarioCostModel,
+              instrument: "domestic_equity_etf", tickSize,
               initialCash: 1_000_000, warmupBars: lookbackWarmup, slippageTicks: scenario.slippageTicks,
               datasetVersion, evaluationStartDate: window.start, evaluationEndDate: window.end,
             });
@@ -122,7 +130,8 @@ function main() {
         distributionStatus: nonzeroDistributions ? "partial_data_requires_review" : "missing_or_none_unverified",
       },
       settings: {
-        initialCash: 1_000_000, targetExposure: 0.6, commissionRate, sellTaxRate, sellTaxBasis,
+        initialCash: 1_000_000, targetExposure: 0.6, costModelVersion: costModel.version,
+        effectiveCostSchedules: orderedSchedules,
         stressMethod: "commission and slippage doubled; statutory tax unchanged",
         lookbackWarmup,
       },

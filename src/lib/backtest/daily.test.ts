@@ -163,6 +163,28 @@ describe("daily backtest", () => {
     })).toThrow(/Evaluation window contains no bars/);
   });
 
+  it("uses the effective dated commission when the caller does not override it", () => {
+    const bars = series(8, () => 10_000);
+    const datedCosts: CostModel = {
+      version: "dated-fees",
+      schedules: {
+        domestic_equity_etf: [
+          { effectiveFrom: bars[0].date, commissionRate: 0.001, sellTaxRate: 0, basis: "first period" },
+          { effectiveFrom: bars[4].date, commissionRate: 0.002, sellTaxRate: 0, basis: "second period" },
+        ],
+      },
+    };
+    let calls = 0;
+    const result = runDailyBacktest({
+      bars, costModel: datedCosts, instrument: "domestic_equity_etf", tickSize: 5,
+      initialCash: 1_000_000, warmupBars: 3,
+      strategy: { name: "dated-fee-probe", version: "1", evaluate: () => ({ targetWeight: calls++ === 0 ? 0.6 : 0, reason: "probe" }) },
+    });
+    expect(result.fills).toHaveLength(2);
+    expect(result.fills[0].cost.commission).toBeCloseTo(result.fills[0].cost.grossAmount * 0.001, 6);
+    expect(result.fills[1].cost.commission).toBeCloseTo(result.fills[1].cost.grossAmount * 0.002, 6);
+  });
+
   it("keeps absolute momentum in cash when the lookback return is nonpositive", () => {
     const falling = series(30, i => 20_000 - i * 100);
     const result = runDailyBacktest({

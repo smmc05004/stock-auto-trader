@@ -1,5 +1,5 @@
 import { simpleMovingAverage, barsUsable, type DailyBar } from "@/lib/marketData/bars";
-import { applySlippage, tradeCost, type CostModel, type InstrumentClass, type TradeCost } from "./cost";
+import { applySlippage, resolveSchedule, tradeCost, type CostModel, type InstrumentClass, type TradeCost } from "./cost";
 
 /**
  * 일봉 백테스트. 신호는 확정 종가로만 만들고 체결은 다음 거래일 시가로 한다.
@@ -34,7 +34,8 @@ export type DailyBacktestInput = {
   bars: DailyBar[];
   strategy: DailyStrategy;
   costModel: CostModel;
-  commissionRate: number;
+  /** Optional fixed override; omit to use the dated commission in costModel. */
+  commissionRate?: number;
   instrument: InstrumentClass;
   tickSize: number;
   initialCash: number;
@@ -89,14 +90,15 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
 
     if (pending && i >= firstEvaluationIndex) {
       const equity = cash + quantity * bar.open;
+      const barCommissionRate = commissionRate ?? resolveSchedule(costModel, instrument, bar.date).commissionRate;
       // 수량은 슬리피지까지 반영한 예상 체결가로 계산한다. 시가로 계산하면 매수가 현금을 넘긴다.
       const sizingPrice = applySlippage(bar.open, "buy", tickSize, slippageTicks);
-      const targetQuantity = Math.floor(equity * pending.targetWeight / (sizingPrice * (1 + commissionRate)));
+      const targetQuantity = Math.floor(equity * pending.targetWeight / (sizingPrice * (1 + barCommissionRate)));
       const delta = targetQuantity - quantity;
       if (delta !== 0) {
         const side = delta > 0 ? "buy" : "sell";
         const size = Math.abs(delta);
-        const cost = tradeCost(costModel, { side, price: bar.open, quantity: size, instrument, date: bar.date, tickSize, slippageTicks }, commissionRate);
+        const cost = tradeCost(costModel, { side, price: bar.open, quantity: size, instrument, date: bar.date, tickSize, slippageTicks }, barCommissionRate);
         const affordable = side === "buy" ? cash + cost.cashDelta >= 0 : size <= quantity;
         if (affordable) {
           if (side === "buy") { basis += cost.grossAmount + cost.commission; quantity += size; }
