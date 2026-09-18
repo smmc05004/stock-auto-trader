@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { KR_COST_MODEL_2026, applySlippage, resolveSchedule, roundTripCostRate, tradeCost, type CostModel } from "./cost";
+import { KIS_BANKIS_ONLINE_PUBLISHED, KR_COST_MODEL_2026, applySlippage, distributionTax, resolveSchedule, roundTripCostRate, tradeCost, type CostModel } from "./cost";
 import { checkBars, simpleMovingAverage, type DailyBar } from "@/lib/marketData/bars";
 import { createAbsoluteMomentumStrategy, createBuyAndHoldStrategy, createTrendStrategy, runDailyBacktest } from "./daily";
 
@@ -7,10 +7,10 @@ const model: CostModel = {
   version: "test",
   schedules: {
     kospi_stock: [
-      { effectiveFrom: "2020-01-01", commissionRate: 0, sellTaxRate: 0.0023, basis: "이전" },
-      { effectiveFrom: "2026-01-01", commissionRate: 0, sellTaxRate: 0.002, basis: "현행" },
+      { effectiveFrom: "2020-01-01", commissionRate: 0, sellTaxRate: 0.0023, distributionTaxRate: 0.154, basis: "이전" },
+      { effectiveFrom: "2026-01-01", commissionRate: 0, sellTaxRate: 0.002, distributionTaxRate: 0.154, basis: "현행" },
     ],
-    domestic_equity_etf: [{ effectiveFrom: "2020-01-01", commissionRate: 0, sellTaxRate: 0, basis: "ETF" }],
+    domestic_equity_etf: [{ effectiveFrom: "2020-01-01", commissionRate: 0, sellTaxRate: 0, distributionTaxRate: 0.154, basis: "ETF" }],
   },
 };
 
@@ -42,11 +42,30 @@ describe("cost model", () => {
     expect(stock).toBeGreaterThan(etf);
     expect(etf).toBeGreaterThan(0);
   });
+  it("withholds nothing when there is no distribution", () => {
+    expect(distributionTax(model, "kospi_stock", "2026-06-30", 0)).toBe(0);
+    expect(distributionTax(model, "kospi_stock", "2026-06-30", 1000)).toBeCloseTo(154, 6);
+  });
   it("rejects implausible inputs instead of coercing them", () => {
     expect(() => tradeCost(model, { side: "buy", price: 0, quantity: 1, instrument: "kospi_stock", date: "2026-06-30", tickSize: 10 }, 0.00015)).toThrow();
     expect(() => tradeCost(model, { side: "buy", price: 100, quantity: 1.5, instrument: "kospi_stock", date: "2026-06-30", tickSize: 10 }, 0.00015)).toThrow();
     expect(() => tradeCost(model, { side: "buy", price: 100, quantity: 1, instrument: "kospi_stock", date: "2026-06-30", tickSize: 10 }, 0.5)).toThrow();
     expect(() => applySlippage(100, "buy", 0, 1)).toThrow();
+  });
+  it("treats a domestic equity ETF as exempt from securities transaction tax", () => {
+    const etf = resolveSchedule(KR_COST_MODEL_2026, "domestic_equity_etf", "2026-09-18");
+    expect(etf.sellTaxRate).toBe(0);
+    expect(etf.distributionTaxRate).toBe(0.154);
+    expect(etf.basis).toMatch(/증권거래세법 제2조/);
+    const sell = tradeCost(KR_COST_MODEL_2026, { side: "sell", price: 10_000, quantity: 1, instrument: "domestic_equity_etf", date: "2026-09-18", tickSize: 5 }, KIS_BANKIS_ONLINE_PUBLISHED.etf);
+    expect(sell.tax).toBe(0);
+    expect(sell.commission).toBeGreaterThan(0);
+  });
+  it("keeps the published BanKIS rates separate from an account-verified rate", () => {
+    expect(KIS_BANKIS_ONLINE_PUBLISHED.etf).toBe(0.000146527);
+    expect(KIS_BANKIS_ONLINE_PUBLISHED.stock).toBe(0.000140527);
+    expect(KIS_BANKIS_ONLINE_PUBLISHED.etf).toBeGreaterThan(KIS_BANKIS_ONLINE_PUBLISHED.stock);
+    expect(KIS_BANKIS_ONLINE_PUBLISHED.source).toMatch(/koreainvestment/);
   });
   it("ships a 2026 Korean model whose commission must be supplied per account", () => {
     for (const cls of ["kospi_stock", "kosdaq_stock", "domestic_equity_etf"] as const) {
@@ -169,8 +188,8 @@ describe("daily backtest", () => {
       version: "dated-fees",
       schedules: {
         domestic_equity_etf: [
-          { effectiveFrom: bars[0].date, commissionRate: 0.001, sellTaxRate: 0, basis: "first period" },
-          { effectiveFrom: bars[4].date, commissionRate: 0.002, sellTaxRate: 0, basis: "second period" },
+          { effectiveFrom: bars[0].date, commissionRate: 0.001, sellTaxRate: 0, distributionTaxRate: 0.154, basis: "first period" },
+          { effectiveFrom: bars[4].date, commissionRate: 0.002, sellTaxRate: 0, distributionTaxRate: 0.154, basis: "second period" },
         ],
       },
     };
@@ -193,6 +212,28 @@ describe("daily backtest", () => {
     });
     expect(result.fills.filter(fill => fill.side === "buy")).toHaveLength(0);
     expect(result.finalEquity).toBe(base.initialCash);
+  });
+
+  it("withholds 15.4% on distributions and flags when none were applied", () => {
+    const plain = series(8, () => 10_000);
+    const paying = plain.map((b, i) => i === 5 ? { ...b, distribution: 100 } : b);
+    const strategy = { name: "hold", version: "t", evaluate: () => ({ targetWeight: 1, reason: "hold" }) };
+
+    const without = runDailyBacktest({ ...base, bars: plain, strategy });
+    expect(without.distributionTaxApplied).toBe(false);
+    expect(without.distributionsNet).toBe(0);
+
+    const withDistribution = runDailyBacktest({ ...base, bars: paying, strategy });
+    expect(withDistribution.distributionTaxApplied).toBe(true);
+    const gross = withDistribution.distributionsNet + withDistribution.distributionTaxPaid;
+    expect(withDistribution.distributionTaxPaid / gross).toBeCloseTo(0.154, 6);
+    // 자산 증가는 세후 분배금을 넘지 않는다. 세전으로 더하면 여기서 초과가 드러난다.
+    const gain = withDistribution.finalEquity - without.finalEquity;
+    expect(gain).toBeGreaterThan(0);
+    expect(gain).toBeLessThanOrEqual(withDistribution.distributionsNet);
+    expect(gain).toBeLessThan(gross);
+    // 남은 차이는 분배금을 재투자하며 낸 수수료뿐이다.
+    expect(withDistribution.distributionsNet - gain).toBeLessThan(gross * 0.01);
   });
 
   it("reports monthly rows, drawdown and turnover", () => {

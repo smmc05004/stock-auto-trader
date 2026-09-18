@@ -42,6 +42,9 @@ function summary(result: DailyBacktestResult) {
     finalEquity: result.finalEquity, returnRate: result.returnRate, maxDrawdown: result.maxDrawdown,
     recoveryDays: result.recoveryDays, trades: result.trades, costTotal: result.costTotal,
     averageExposure: result.averageExposure, turnover: result.turnover,
+    // 분배금이 실제로 반영·과세됐는지 결과마다 드러낸다. false면 분배금 수익과 세금이 모두 빠진 상태다.
+    distributionsNet: result.distributionsNet, distributionTaxPaid: result.distributionTaxPaid,
+    distributionTaxApplied: result.distributionTaxApplied,
     monthly: result.monthly, blocked: result.blocked,
   };
 }
@@ -62,6 +65,7 @@ function main() {
     date(schedule.effectiveFrom, "cost-schedule effectiveFrom");
     if (!Number.isFinite(schedule.commissionRate) || schedule.commissionRate < 0 || schedule.commissionRate >= 0.005
       || !Number.isFinite(schedule.sellTaxRate) || schedule.sellTaxRate < 0 || schedule.sellTaxRate >= 0.01
+      || !Number.isFinite(schedule.distributionTaxRate) || schedule.distributionTaxRate < 0 || schedule.distributionTaxRate >= 1
       || !schedule.basis.trim()) throw new Error("Cost schedule contains an invalid rate or missing basis");
   }
   const windows: Window[] = [
@@ -139,6 +143,7 @@ function main() {
         "This report compares historical scenarios and does not predict future returns.",
         "Daily next-open fills approximate, and do not reproduce, the configured intraday limit-order execution.",
         "Distribution values must be verified; zero values do not prove that no distributions occurred.",
+        "When distributionTaxApplied is false, both distribution income and its 15.4% withholding are absent, so adjusted-close returns remain pre-tax and overstated.",
         "A positive final-test result alone is insufficient evidence of a robust edge.",
       ],
       candidates: results,
