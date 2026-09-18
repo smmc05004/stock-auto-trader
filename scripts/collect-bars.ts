@@ -24,9 +24,10 @@ async function token() {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ grant_type: "client_credentials", appkey: APP_KEY, appsecret: APP_SECRET }),
   });
-  if (!res.ok) throw new Error(`Token request failed with HTTP ${res.status}`);
-  const data = await res.json() as { access_token?: string };
-  if (!data.access_token) throw new Error("Token response did not contain access_token");
+  const data = await res.json().catch(() => ({})) as { access_token?: string; error_code?: string; error_description?: string };
+  if (!res.ok || !data.access_token) {
+    throw new Error(`Token request failed: HTTP ${res.status} ${data.error_code ?? ""} ${data.error_description ?? ""}`.trim());
+  }
   return data.access_token;
 }
 
@@ -39,6 +40,8 @@ async function main() {
   if (!APP_KEY || !APP_SECRET) throw new Error("KIS_PAPER_APP_KEY / KIS_PAPER_APP_SECRET are required");
 
   const access = await token();
+  // 토큰 직후 바로 조회하면 초당 호출 제한에 걸린다. 첫 요청 전에 잠시 둔다.
+  await new Promise(resolve => setTimeout(resolve, 1500));
   const bars = await collectDailyBars(async ({ symbol: code, start: from, end: to, adjusted }) => {
     const url = new URL("/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice", BASE);
     for (const [k, v] of Object.entries({
@@ -49,11 +52,13 @@ async function main() {
     const res = await fetch(url, { headers: {
       "content-type": "application/json", authorization: `Bearer ${access}`,
       appkey: APP_KEY, appsecret: APP_SECRET, tr_id: "FHKST03010100", custtype: "P" } });
-    if (!res.ok) throw new Error(`Daily chart request failed with HTTP ${res.status}`);
-    const data = await res.json() as { rt_cd?: string; msg1?: string; output2?: KisDailyRow[] };
-    if (data.rt_cd !== "0") throw new Error(`KIS rejected the daily chart request: ${data.msg1 ?? "unknown"}`);
+    // KIS는 오류도 본문에 코드를 담아 보내므로 상태코드만 보고 버리지 않는다.
+    const data = await res.json().catch(() => ({})) as { rt_cd?: string; msg_cd?: string; msg1?: string; output2?: KisDailyRow[] };
+    if (!res.ok || data.rt_cd !== "0") {
+      throw new Error(`Daily chart request failed: HTTP ${res.status} rt_cd=${data.rt_cd ?? "?"} msg_cd=${data.msg_cd ?? "?"} msg=${String(data.msg1 ?? "").trim() || "unknown"}`);
+    }
     return (data.output2 ?? []).filter(r => r.stck_bsop_date);
-  }, { symbol, start, end, adjusted: true });
+  }, { symbol, start, end, adjusted: true, delayMs: 700 });
 
   const issues = checkBars(bars);
   const store = new BarStore(file);

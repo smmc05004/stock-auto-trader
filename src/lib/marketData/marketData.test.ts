@@ -47,6 +47,29 @@ describe("KIS daily parsing", () => {
     expect(calls.length).toBe(2);
     expect(bars.map(b => b.date)).toEqual(["2026-01-02", "2026-01-03", "2026-01-04"]);
   });
+  it("spaces out pages and retries once when the rate limit rejects a page", async () => {
+    const waits: number[] = [];
+    let attempts = 0;
+    const bars = await collectDailyBars(async ({ start }) => {
+      attempts++;
+      if (attempts === 1) throw new Error("Daily chart request failed: HTTP 500 rt_cd=1 msg_cd=EGW00201 msg=초당 거래건수를 초과하였습니다.");
+      return start <= "2026-01-03" ? [row("20260102", 100)] : [row("20260104", 102)];
+    }, { symbol: "229200", start: "2026-01-01", end: "2026-01-06", adjusted: true, chunkDays: 3, delayMs: 700, wait: async ms => { waits.push(ms); } });
+    expect(attempts).toBe(3);
+    expect(waits).toContain(2000);
+    expect(waits).toContain(700);
+    expect(bars.map(b => b.date)).toEqual(["2026-01-02", "2026-01-04"]);
+  });
+  it("gives up after repeated rate limits instead of retrying forever", async () => {
+    let attempts = 0;
+    await expect(collectDailyBars(async () => { attempts++; throw new Error("msg_cd=EGW00201 초당 거래건수"); },
+      { symbol: "229200", start: "2026-01-01", end: "2026-01-06", adjusted: true, wait: async () => {} })).rejects.toThrow(/EGW00201/);
+    expect(attempts).toBe(4);
+  });
+  it("does not swallow a non rate-limit failure", async () => {
+    await expect(collectDailyBars(async () => { throw new Error("Daily chart request failed: HTTP 500 rt_cd=1 msg_cd=EGW00123 msg=token"); },
+      { symbol: "229200", start: "2026-01-01", end: "2026-01-06", adjusted: true, wait: async () => {} })).rejects.toThrow(/EGW00123/);
+  });
   it("stops rather than looping forever when the range is invalid", async () => {
     await expect(collectDailyBars(async () => [], { symbol: "229200", start: "2026-02-01", end: "2026-01-01", adjusted: true })).rejects.toThrow(/range/);
   });

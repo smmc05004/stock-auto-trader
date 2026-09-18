@@ -1,5 +1,5 @@
 import { simpleMovingAverage, barsUsable, type DailyBar } from "@/lib/marketData/bars";
-import { applySlippage, resolveSchedule, tradeCost, type CostModel, type InstrumentClass, type TradeCost } from "./cost";
+import { applySlippage, distributionTax, resolveSchedule, tradeCost, type CostModel, type InstrumentClass, type TradeCost } from "./cost";
 
 /**
  * 일봉 백테스트. 신호는 확정 종가로만 만들고 체결은 다음 거래일 시가로 한다.
@@ -26,6 +26,8 @@ export type DailyBacktestResult = {
   initialCash: number; finalEquity: number; returnRate: number;
   maxDrawdown: number; recoveryDays: number;
   trades: number; costTotal: number; realized: number; unrealizedAtEnd: number;
+  /** 분배금 수령액(세후)과 원천징수액. 봉 데이터에 분배금이 없으면 둘 다 0이고 applied는 false다. */
+  distributionsNet: number; distributionTaxPaid: number; distributionTaxApplied: boolean;
   averageExposure: number; turnover: number;
   fills: DailyFill[]; monthly: MonthlyRow[]; blocked: string[];
 };
@@ -77,6 +79,7 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
   if (firstEvaluationIndex < 0 || firstEvaluationIndex > lastIndex) throw new Error("Evaluation window contains no bars");
 
   let cash = initialCash, quantity = 0, basis = 0, realized = 0, costTotal = 0, turnoverAmount = 0;
+  let distributionsNet = 0, distributionTaxPaid = 0, distributionTaxApplied = false;
   const fills: DailyFill[] = [];
   const blocked: string[] = [];
   const curve: { date: string; equity: number }[] = [];
@@ -87,6 +90,17 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
     if (i > lastIndex) break;
+
+    // 분배금은 보유 수량에 지급되고 15.4%가 원천징수된다.
+    // 수정주가는 분배금을 세전 재투자로 반영하므로, 빼지 않으면 수익이 과대평가된다.
+    if (bar.distribution > 0 && quantity > 0) {
+      const gross = bar.distribution * quantity;
+      const withheld = distributionTax(costModel, instrument, bar.date, gross);
+      cash += gross - withheld;
+      distributionsNet += gross - withheld;
+      distributionTaxPaid += withheld;
+      distributionTaxApplied = true;
+    }
 
     if (pending && i >= firstEvaluationIndex) {
       const equity = cash + quantity * bar.open;
@@ -151,6 +165,7 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
     initialCash, finalEquity, returnRate: (finalEquity - initialCash) / initialCash,
     maxDrawdown, recoveryDays, trades: fills.length, costTotal, realized,
     unrealizedAtEnd: quantity * last.close - basis,
+    distributionsNet, distributionTaxPaid, distributionTaxApplied,
     averageExposure: exposures.reduce((a, b) => a + b, 0) / (exposures.length || 1),
     turnover: turnoverAmount / initialCash,
     fills, monthly: [...monthly.values()], blocked,
