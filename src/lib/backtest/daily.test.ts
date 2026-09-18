@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { KR_COST_MODEL_2026, applySlippage, resolveSchedule, roundTripCostRate, tradeCost, type CostModel } from "./cost";
 import { checkBars, simpleMovingAverage, type DailyBar } from "@/lib/marketData/bars";
-import { createTrendStrategy, runDailyBacktest } from "./daily";
+import { createAbsoluteMomentumStrategy, createBuyAndHoldStrategy, createTrendStrategy, runDailyBacktest } from "./daily";
 
 const model: CostModel = {
   version: "test",
@@ -121,6 +121,32 @@ describe("daily backtest", () => {
     const flat = runDailyBacktest({ ...base, bars: down, warmupBars: 10, strategy: createTrendStrategy({ period: 10, maxExposure: 0.6 }) });
     expect(flat.fills.filter(f => f.side === "buy")).toHaveLength(0);
     expect(flat.finalEquity).toBe(base.initialCash);
+  });
+
+  it("compares an absolute momentum gate and passive exposure through the same cost engine", () => {
+    const rising = series(40, i => 10_000 + i * 20);
+    const momentum = runDailyBacktest({
+      ...base, bars: rising, warmupBars: 10,
+      strategy: createAbsoluteMomentumStrategy({ lookback: 5, maxExposure: 0.6 }),
+    });
+    const passive = runDailyBacktest({
+      ...base, bars: rising, warmupBars: 10,
+      strategy: createBuyAndHoldStrategy({ targetWeight: 0.6 }),
+    });
+    expect(momentum.fills[0].date).toBe(rising[10].date);
+    expect(momentum.fills[0].side).toBe("buy");
+    expect(passive.fills[0].side).toBe("buy");
+    expect(momentum.strategy).not.toBe(passive.strategy);
+  });
+
+  it("keeps absolute momentum in cash when the lookback return is nonpositive", () => {
+    const falling = series(30, i => 20_000 - i * 100);
+    const result = runDailyBacktest({
+      ...base, bars: falling, warmupBars: 10,
+      strategy: createAbsoluteMomentumStrategy({ lookback: 5, maxExposure: 0.6 }),
+    });
+    expect(result.fills.filter(fill => fill.side === "buy")).toHaveLength(0);
+    expect(result.finalEquity).toBe(base.initialCash);
   });
 
   it("reports monthly rows, drawdown and turnover", () => {

@@ -158,3 +158,36 @@ export function createTrendStrategy(options: { period: number; maxExposure: numb
     },
   };
 }
+
+/**
+ * Absolute momentum gate: hold only when the confirmed adjusted close exceeds
+ * its close from N observations ago. This is a research candidate, not a
+ * profitability claim. Evaluation occurs daily; unchanged targets do not trade.
+ */
+export function createAbsoluteMomentumStrategy(options: { lookback: number; maxExposure: number }): DailyStrategy {
+  const { lookback, maxExposure } = options;
+  if (!Number.isInteger(lookback) || lookback < 1) throw new Error("lookback must be a positive integer");
+  if (!(maxExposure >= 0 && maxExposure <= 1)) throw new Error("maxExposure must be between 0 and 1");
+  return {
+    name: `kr-etf-absolute-momentum-${lookback}`,
+    version: "v0.1",
+    evaluate(history) {
+      const latest = history.at(-1);
+      const reference = history.at(-1 - lookback);
+      if (!latest || !reference) return { targetWeight: 0, reason: "insufficient_history" };
+      const positive = latest.adjustedClose > reference.adjustedClose;
+      return { targetWeight: positive ? maxExposure : 0, reason: positive ? "positive_lookback_return" : "nonpositive_lookback_return" };
+    },
+  };
+}
+
+/** Passive comparator with a fixed target weight, using the same execution and cost model. */
+export function createBuyAndHoldStrategy(options: { targetWeight: number }): DailyStrategy {
+  const { targetWeight } = options;
+  if (!(targetWeight >= 0 && targetWeight <= 1)) throw new Error("targetWeight must be between 0 and 1");
+  return {
+    name: `buy-and-hold-${Math.round(targetWeight * 100)}pct`,
+    version: "v1",
+    evaluate: () => ({ targetWeight, reason: "fixed_target_weight" }),
+  };
+}
