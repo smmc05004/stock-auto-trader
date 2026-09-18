@@ -42,6 +42,9 @@ export type DailyBacktestInput = {
   warmupBars: number;
   slippageTicks?: number;
   datasetVersion?: string;
+  /** Evaluation window. Earlier bars warm up the strategy but create no positions or P&L. */
+  evaluationStartDate?: string;
+  evaluationEndDate?: string;
 };
 
 function drawdownAndRecovery(curve: { date: string; equity: number }[]) {
@@ -60,9 +63,17 @@ function drawdownAndRecovery(curve: { date: string; equity: number }[]) {
 }
 
 export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult {
-  const { bars, strategy, costModel, commissionRate, instrument, tickSize, initialCash, warmupBars, slippageTicks = 1, datasetVersion = "" } = input;
+  const {
+    bars, strategy, costModel, commissionRate, instrument, tickSize, initialCash, warmupBars,
+    slippageTicks = 1, datasetVersion = "", evaluationStartDate, evaluationEndDate,
+  } = input;
   const usable = barsUsable(bars, warmupBars + 1);
   if (!usable.usable) throw new Error(`Unusable bars: ${usable.reason} (${usable.issues.length} issues)`);
+  if (evaluationStartDate && evaluationEndDate && evaluationStartDate > evaluationEndDate) throw new Error("evaluationStartDate must not be after evaluationEndDate");
+  const firstEvaluationIndex = evaluationStartDate ? bars.findIndex(b => b.date >= evaluationStartDate) : 0;
+  const firstBarAfterEnd = evaluationEndDate ? bars.findIndex(b => b.date > evaluationEndDate) : -1;
+  const lastIndex = firstBarAfterEnd < 0 ? bars.length - 1 : firstBarAfterEnd - 1;
+  if (firstEvaluationIndex < 0 || firstEvaluationIndex > lastIndex) throw new Error("Evaluation window contains no bars");
 
   let cash = initialCash, quantity = 0, basis = 0, realized = 0, costTotal = 0, turnoverAmount = 0;
   const fills: DailyFill[] = [];
@@ -74,8 +85,9 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
 
   for (let i = 0; i < bars.length; i++) {
     const bar = bars[i];
+    if (i > lastIndex) break;
 
-    if (pending) {
+    if (pending && i >= firstEvaluationIndex) {
       const equity = cash + quantity * bar.open;
       // 수량은 슬리피지까지 반영한 예상 체결가로 계산한다. 시가로 계산하면 매수가 현금을 넘긴다.
       const sizingPrice = applySlippage(bar.open, "buy", tickSize, slippageTicks);
@@ -105,17 +117,19 @@ export function runDailyBacktest(input: DailyBacktestInput): DailyBacktestResult
     // 방금 마감된 봉까지가 확정 이력이다. 체결은 다음 봉 시가이므로 미래 정보가 아니다.
     const history = bars.slice(0, i + 1);
     const equity = cash + quantity * bar.close;
-    curve.push({ date: bar.date, equity });
-    exposures.push(equity > 0 ? (quantity * bar.close) / equity : 0);
+    if (i >= firstEvaluationIndex) {
+      curve.push({ date: bar.date, equity });
+      exposures.push(equity > 0 ? (quantity * bar.close) / equity : 0);
+    }
 
-    if (history.length >= warmupBars && i < bars.length - 1) {
+    if (history.length >= warmupBars && i < lastIndex) {
       const signal = strategy.evaluate(history, { date: bar.date, equity, quantity });
       if (signal.targetWeight < 0 || signal.targetWeight > 1) throw new Error("targetWeight must be between 0 and 1");
       pending = { targetWeight: signal.targetWeight, reason: signal.reason };
     }
   }
 
-  const last = bars[bars.length - 1];
+  const last = bars[lastIndex];
   const finalEquity = cash + quantity * last.close;
   const monthly = new Map<string, MonthlyRow>();
   for (const point of curve) {

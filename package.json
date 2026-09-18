@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "build:paper": "node scripts/build-paper.mjs",
+    "backtest:etf": "node scripts/backtest-etf-candidates.mjs",
     "paper:probe": "node dist/paper-probe.cjs",
     "start": "next start",
     "lint": "eslint",

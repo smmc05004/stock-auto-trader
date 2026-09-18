@@ -139,6 +139,30 @@ describe("daily backtest", () => {
     expect(momentum.strategy).not.toBe(passive.strategy);
   });
 
+  it("warms up before an evaluation window without trading or counting pre-window returns", () => {
+    const bars = series(30, i => 10_000 + i * 100);
+    const start = bars[20].date;
+    const end = bars[25].date;
+    const result = runDailyBacktest({
+      ...base, bars, warmupBars: 10, evaluationStartDate: start, evaluationEndDate: end,
+      strategy: createAbsoluteMomentumStrategy({ lookback: 5, maxExposure: 0.6 }),
+    });
+    expect(result.fills[0].date).toBe(start);
+    expect(result.monthly).toHaveLength(1);
+    expect(result.monthly[0].endEquity).toBe(result.finalEquity);
+    const firstFill = result.fills[0];
+    expect(result.fills.every(fill => fill.date >= start && fill.date <= end)).toBe(true);
+    expect(result.finalEquity).toBeLessThan(1_000_000 + firstFill.quantity * (bars[25].close - firstFill.price));
+  });
+
+  it("rejects evaluation ranges that contain no observations", () => {
+    const bars = series(10, i => 10_000 + i);
+    expect(() => runDailyBacktest({
+      ...base, bars, warmupBars: 3, evaluationStartDate: "2027-01-01",
+      strategy: createBuyAndHoldStrategy({ targetWeight: 0.6 }),
+    })).toThrow(/Evaluation window contains no bars/);
+  });
+
   it("keeps absolute momentum in cash when the lookback return is nonpositive", () => {
     const falling = series(30, i => 20_000 - i * 100);
     const result = runDailyBacktest({
