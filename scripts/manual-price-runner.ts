@@ -1,11 +1,20 @@
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { env } from "../src/lib/config/env";
 import { createBrokerClient } from "../src/lib/broker";
 import { MANUAL_SYMBOL } from "../src/lib/manualPrice/validation";
+import { onBuyStatus, onQuote, onSellStatus, type ManualEngineState, type ManualOrder } from "../src/lib/manualPrice/engine";
 
-type Config = { id: string; buy_price_krw: number; sell_price_krw: number; planned_quantity: number; status: string; expires_at: string };
+type Config = { id: string; buy_price_krw: number; sell_price_krw: number; planned_quantity: number; status: string };
+type Cycle = { id: string; config_id: string; status: string; quantity: number };
+type StoredOrder = { id: string; cycle_id: string; side: "buy" | "sell"; limit_price_krw: number; requested_quantity: number; broker_order_id: string | null; status: string; filled_quantity: number; submitted_at: string | null };
+
+const POLL_MS = 2_000;
+const CANCEL_AFTER_MS = 5 * 60_000;
 
 function assertPaper() {
   if (env.TRADING_MODE !== "paper" || env.ALLOW_LIVE_TRADING) throw new Error("Manual price runner is paper-only.");
+  if (!env.MANUAL_PRICE_RUNNER_ENABLED) throw new Error("Manual price runner is disabled.");
   if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) throw new Error("Supabase API environment is not configured.");
 }
 
@@ -18,22 +27,106 @@ async function db(path: string, init: RequestInit = {}) {
   return response.status === 204 ? null : response.json();
 }
 
+async function getConfig(): Promise<Config | null> {
+  const rows = await db(`manual_price_configs?select=id,buy_price_krw,sell_price_krw,planned_quantity,status&account_ref=eq.${encodeURIComponent(env.BROKER_ACCOUNT_NO)}&order=created_at.desc&limit=1`) as Config[];
+  return rows[0] ?? null;
+}
+
+async function getCycle(configId: string): Promise<Cycle> {
+  const rows = await db(`manual_price_cycles?select=id,config_id,status,quantity&config_id=eq.${configId}&status=not.in.(completed,blocked,needs_reconciliation)&order=started_at.desc&limit=1`) as Cycle[];
+  if (rows[0]) return rows[0];
+  const rowsCreated = await db("manual_price_cycles", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ account_ref: env.BROKER_ACCOUNT_NO, config_id: configId, status: "waiting_buy", quantity: 0 }) }) as Cycle[];
+  if (!rowsCreated[0]) throw new Error("Could not create manual price cycle.");
+  return rowsCreated[0];
+}
+
+async function getOrder(cycleId: string, side: "buy" | "sell"): Promise<StoredOrder | null> {
+  const rows = await db(`manual_price_orders?select=*&cycle_id=eq.${cycleId}&side=eq.${side}&order=updated_at.desc&limit=1`) as StoredOrder[];
+  return rows[0] ?? null;
+}
+
+async function saveOrder(cycle: Cycle, order: ManualOrder, brokerOrderId: string | null, status: string, filledQuantity = 0) {
+  const rows = await db("manual_price_orders", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ cycle_id: cycle.id, client_order_key: `${cycle.id}:${order.side}:${randomUUID()}`, side: order.side, limit_price_krw: order.limitPrice, requested_quantity: order.quantity, broker_order_id: brokerOrderId, status, filled_quantity: filledQuantity, submitted_at: brokerOrderId ? new Date().toISOString() : null }) }) as StoredOrder[];
+  if (!rows[0]) throw new Error("Could not persist order intent.");
+  return rows[0];
+}
+
+async function updateOrder(order: StoredOrder, values: Record<string, unknown>) {
+  await db(`manual_price_orders?id=eq.${order.id}`, { method: "PATCH", body: JSON.stringify({ ...values, updated_at: new Date().toISOString() }) });
+}
+
+async function remoteOrder(broker: { getPaperDailyOrders: (start: string, end: string) => Promise<Array<{ orderId: string; filledQuantity: number; remainingQuantity: number; cancelled: boolean; rejectedQuantity: number; averagePrice: number }>> }, orderId: string) {
+  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
+  const rows = await broker.getPaperDailyOrders(today, today);
+  const suffix = orderId.split("-").at(-1);
+  const row = rows.find((candidate) => candidate.orderId === suffix);
+  return row ?? null;
+}
+
+async function tick() {
+  const config = await getConfig();
+  if (!config || config.status === "cancelled") return "no_config";
+  const broker = createBrokerClient();
+  const cycle = await getCycle(config.id);
+  const state: ManualEngineState = { phase: cycle.status === "buying" ? "buying" : cycle.status === "selling" ? "selling" : "waiting_buy", completedCycles: 0 };
+  const buyOrder = await getOrder(cycle.id, "buy");
+  const sellOrder = await getOrder(cycle.id, "sell");
+
+  const orderBroker = broker as unknown as Parameters<typeof remoteOrder>[0];
+  if (sellOrder?.broker_order_id) {
+    const remote = await remoteOrder(orderBroker, sellOrder.broker_order_id);
+    if (!remote) return "sell_reconcile_pending";
+    await updateOrder(sellOrder, { filled_quantity: remote.filledQuantity, status: remote.remainingQuantity === 0 ? (remote.cancelled ? "cancelled" : "filled") : "partially_filled" });
+    state.phase = "selling";
+    state.sell = { side: "sell", limitPrice: sellOrder.limit_price_krw, quantity: sellOrder.requested_quantity, filledQuantity: sellOrder.filled_quantity };
+    const action = onSellStatus(state, remote.filledQuantity, remote.remainingQuantity);
+    if (action.type === "wait" && action.reason === "cycle_completed") {
+      await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "completed", quantity: remote.filledQuantity, completed_at: new Date().toISOString() }) });
+      return "cycle_completed";
+    }
+    return action.type === "wait" || action.type === "reconcile" ? action.reason : action.type;
+  }
+
+  if (buyOrder?.broker_order_id) {
+    const remote = await remoteOrder(orderBroker, buyOrder.broker_order_id);
+    if (!remote) return "buy_reconcile_pending";
+    await updateOrder(buyOrder, { filled_quantity: remote.filledQuantity, status: remote.remainingQuantity === 0 ? (remote.cancelled ? "cancelled" : "filled") : "partially_filled" });
+    state.phase = "buying";
+    state.buy = { side: "buy", limitPrice: buyOrder.limit_price_krw, quantity: buyOrder.requested_quantity, filledQuantity: buyOrder.filled_quantity };
+    if (remote.remainingQuantity > 0 && buyOrder.submitted_at && Date.now() - Date.parse(buyOrder.submitted_at) > CANCEL_AFTER_MS) {
+      const cancellation = await broker.cancelOrder(buyOrder.broker_order_id, remote.remainingQuantity);
+      await updateOrder(buyOrder, { status: cancellation.accepted ? "cancel_pending" : "unknown" });
+      return cancellation.accepted ? "buy_cancel_pending" : "buy_cancel_unknown";
+    }
+    const action = onBuyStatus(state, { buyPrice: config.buy_price_krw, sellPrice: config.sell_price_krw, plannedQuantity: config.planned_quantity }, remote.filledQuantity, remote.remainingQuantity);
+    if (action.type === "submit_sell") {
+      await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "selling", quantity: action.quantity }) });
+      const intent = await saveOrder(cycle, { side: "sell", limitPrice: action.price, quantity: action.quantity, filledQuantity: 0 }, null, "intent");
+      const result = await broker.placeOrder({ symbol: MANUAL_SYMBOL, side: "sell", type: "limit", quantity: action.quantity, limitPrice: action.price });
+      await updateOrder(intent, { broker_order_id: result.orderId, status: result.accepted ? "accepted" : "rejected", submitted_at: result.requestedAt });
+      return result.accepted ? "sell_submitted" : "sell_rejected";
+    }
+    return action.type === "wait" || action.type === "reconcile" ? action.reason : action.type;
+  }
+
+  const quote = await broker.getQuote(MANUAL_SYMBOL);
+  const action = onQuote(state, { buyPrice: config.buy_price_krw, sellPrice: config.sell_price_krw, plannedQuantity: config.planned_quantity }, quote);
+  if (action.type !== "submit_buy") return action.type === "wait" || action.type === "reconcile" ? action.reason : action.type;
+  await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "buying" }) });
+  const intent = await saveOrder(cycle, { side: "buy", limitPrice: action.price, quantity: action.quantity, filledQuantity: 0 }, null, "intent");
+  const result = await broker.placeOrder({ symbol: MANUAL_SYMBOL, side: "buy", type: "limit", quantity: action.quantity, limitPrice: action.price });
+  await updateOrder(intent, { broker_order_id: result.orderId, status: result.accepted ? "accepted" : "rejected", submitted_at: result.requestedAt });
+  return result.accepted ? "buy_submitted" : "buy_rejected";
+}
+
 async function main() {
   assertPaper();
-  const configs = await db(`manual_price_configs?select=id,buy_price_krw,sell_price_krw,planned_quantity,status,expires_at&account_ref=eq.${encodeURIComponent(env.BROKER_ACCOUNT_NO)}&status=eq.pending&order=created_at.desc&limit=1`) as Config[];
-  const config = configs[0];
-  if (!config) { console.log(JSON.stringify({ event: "no_pending_manual_price" })); return; }
-  if (Date.parse(config.expires_at) <= Date.now()) { await db(`manual_price_configs?id=eq.${config.id}`, { method: "PATCH", body: JSON.stringify({ status: "expired" }) }); console.log(JSON.stringify({ event: "manual_price_expired", id: config.id })); return; }
-  const broker = createBrokerClient();
-  const account = await broker.getAccountSummary();
-  const quote = await broker.getQuote(MANUAL_SYMBOL);
-  if (account.positions.some((position) => position.symbol === MANUAL_SYMBOL && position.quantity > 0)) { console.log(JSON.stringify({ event: "position_requires_reconciliation", id: config.id })); return; }
-  if (quote.price > config.buy_price_krw) { console.log(JSON.stringify({ event: "waiting_for_buy_price", id: config.id, quote: quote.price })); return; }
-  const value = config.buy_price_krw * config.planned_quantity;
-  if (value > 1_000_000 || value > account.cash) { console.log(JSON.stringify({ event: "buy_budget_blocked", id: config.id })); return; }
-  await db(`manual_price_configs?id=eq.${config.id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
-  const result = await broker.placeOrder({ symbol: MANUAL_SYMBOL, side: "buy", type: "limit", quantity: config.planned_quantity, limitPrice: config.buy_price_krw });
-  console.log(JSON.stringify({ event: "buy_order_submitted", id: config.id, accepted: result.accepted, orderId: result.orderId }));
+  console.log(JSON.stringify({ event: "manual_price_runner_started", pollMs: POLL_MS }));
+  while (true) {
+    try { const result = await tick(); if (result !== "no_config") console.log(JSON.stringify({ event: "manual_price_tick", result })); }
+    catch (error) { console.error(JSON.stringify({ event: "manual_price_tick_error", message: error instanceof Error ? error.message : String(error) })); }
+    await delay(POLL_MS);
+  }
 }
 
 main().catch((error) => { console.error(error instanceof Error ? error.message : String(error)); process.exitCode = 1; });

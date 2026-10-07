@@ -78,4 +78,8 @@ export class MockBrokerClient implements BrokerClient {
       requestedAt: new Date().toISOString(),
     };
   }
+
+  async cancelOrder(orderId: string, quantity: number): Promise<OrderResult> {
+    return { orderId, accepted: quantity > 0, mode: env.TRADING_MODE, message: "Mock cancellation accepted.", requestedAt: new Date().toISOString() };
+  }
 }

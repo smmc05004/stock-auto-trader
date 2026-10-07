@@ -30,6 +30,8 @@ type KisQuoteOutput = {
   hts_kor_isnm?: string;
   stck_prpr?: string;
   prdy_ctrt?: string;
+  askp1?: string;
+  bidp1?: string;
 };
 
 type KisBalancePositionOutput = {
@@ -410,6 +412,8 @@ export class KisBrokerClient implements BrokerClient {
       changeRate: parseNumber(output.prdy_ctrt),
       currency: "KRW",
       timestamp: new Date().toISOString(),
+      bid: parseNumber(output.bidp1),
+      ask: parseNumber(output.askp1),
     };
   }
 
@@ -468,6 +472,19 @@ export class KisBrokerClient implements BrokerClient {
       message: data.msg1 ?? (accepted ? "KIS order accepted." : "KIS order rejected."),
       requestedAt: new Date().toISOString(),
     };
+  }
+
+  async cancelOrder(orderId: string, quantity: number): Promise<OrderResult> {
+    const [org, order] = orderId.split("-");
+    if (!/^\d+$/.test(org ?? "") || !/^\d+$/.test(order ?? "") || !Number.isInteger(quantity) || quantity < 1) {
+      throw new Error("Invalid KIS cancellation identifier.");
+    }
+    const { data } = await this.paperGet("/uapi/domestic-stock/v1/trading/order-rvsecncl", "VTTC0013U", {
+      ...getAccountParts(), KRX_FWDG_ORD_ORGNO: org, ORGN_ODNO: order, ORD_DVSN: "00",
+      RVSE_CNCL_DVSN_CD: "02", ORD_QTY: String(quantity), ORD_UNPR: "0", QTY_ALL_ORD_YN: "Y", EXCG_ID_DVSN_CD: "KRX",
+    });
+    const output = data.output as { ODNO?: string; KRX_FWDG_ORD_ORGNO?: string } | undefined;
+    return { orderId: output?.ODNO ? `${output.KRX_FWDG_ORD_ORGNO ?? org}-${output.ODNO}` : orderId, accepted: data.rt_cd === "0", mode: env.TRADING_MODE, message: String(data.msg1 ?? "Cancellation requested."), requestedAt: new Date().toISOString() };
   }
 
   private getOrderTrId(order: OrderRequest) {
