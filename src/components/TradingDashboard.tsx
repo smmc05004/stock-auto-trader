@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { BacktestPanel } from "@/components/BacktestPanel";
 import { SimulationForm } from "@/components/SimulationForm";
+import { ManualPricePanel } from "@/components/ManualPricePanel";
 import type { BrokerStatus } from "@/lib/broker/broker";
 import type { AccountSummary } from "@/lib/types/trading";
 
@@ -134,10 +135,13 @@ function StrategyView() {
   return (
     <div className="panel">
       <div className="panel-header">
-        <h2>전략 시뮬레이션</h2>
-        <span>sample-momentum</span>
+        <h2>수동 가격 자동매매</h2>
+        <span>paper · 229200</span>
       </div>
       <div className="panel-body">
+        <ManualPricePanel />
+        <hr />
+        <h3>기존 전략 시뮬레이션</h3>
         <SimulationForm />
       </div>
     </div>

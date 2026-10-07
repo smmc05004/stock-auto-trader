@@ -8,6 +8,7 @@
     "build:paper": "node scripts/build-paper.mjs",
     "backtest:etf": "node scripts/backtest-etf-candidates.mjs",
     "paper:probe": "node dist/paper-probe.cjs",
+    "manual-price:runner": "node dist/manual-price-runner.cjs",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run"
