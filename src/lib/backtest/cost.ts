@@ -15,6 +15,8 @@ export type CostSchedule = {
   commissionRate: number;
   /** 매도 시 증권거래세 + 농어촌특별세 합계. 매수에는 부과하지 않는다. */
   sellTaxRate: number;
+  /** 분배금·배당 원천징수율. 수정주가는 분배금을 세전으로 반영하므로 별도로 차감해야 한다. */
+  distributionTaxRate: number;
   /** 요율 근거. 출처 없이 숫자만 두지 않는다. */
   basis: string;
 };
@@ -55,32 +57,55 @@ export type TradeCost = {
  * 2026년 기준 국내 요율. 수수료는 계좌마다 다르므로 0으로 두고 호출자가 주입하게 한다.
  * 0을 "수수료 없음"으로 해석하지 않도록 resolveSchedule에서 검증한다.
  */
+/**
+ * 공시된 한국투자증권 뱅키스 온라인 기본요율(2026-09-18 조회). 개인 계좌의 우대·협의 요율과
+ * 같다고 단정하지 않는다. 실제 청구액은 계좌에서 확인해야 한다.
+ */
+export const KIS_BANKIS_ONLINE_PUBLISHED = {
+  stock: 0.000140527,
+  etf: 0.000146527,
+  source: "https://securities.koreainvestment.com/main/customer/guide/_static/TF04ae010000.jsp?tab=2",
+  checkedOn: "2026-09-18",
+} as const;
+
+/**
+ * 2026년 기준 국내 요율. 수수료는 계좌마다 다르므로 0으로 두고 호출자가 주입하게 한다.
+ * 0을 "수수료 없음"으로 해석하지 않도록 tradeCost에서 명시적으로 받는다.
+ */
 export const KR_COST_MODEL_2026: CostModel = {
-  version: "kr-2026-01",
+  version: "kr-2026-02",
   schedules: {
     kospi_stock: [{
       effectiveFrom: "2026-01-01",
       commissionRate: 0,
       sellTaxRate: 0.002,
-      basis: "증권거래세 0.05% + 농어촌특별세 0.15% (2026 환원). 수수료는 계좌별 확인 필요",
+      distributionTaxRate: 0.154,
+      basis: "증권거래세 0.05% + 농어촌특별세 0.15% (2026 환원). 배당 15.4%. 수수료는 계좌별 확인 필요",
     }],
     kosdaq_stock: [{
       effectiveFrom: "2026-01-01",
       commissionRate: 0,
       sellTaxRate: 0.002,
-      basis: "증권거래세 0.20% (농특세 없음, 2026 환원). 수수료는 계좌별 확인 필요",
+      distributionTaxRate: 0.154,
+      basis: "증권거래세 0.20% (농특세 없음, 2026 환원). 배당 15.4%. 수수료는 계좌별 확인 필요",
     }],
     domestic_equity_etf: [{
       effectiveFrom: "2026-01-01",
       commissionRate: 0,
       sellTaxRate: 0,
-      basis: "국내 상장 ETF 매도 증권거래세 비과세로 가정. KIS/KRX 공식 안내로 재확인 필요",
+      distributionTaxRate: 0.154,
+      basis:
+        "증권거래세 없음: 과세대상이 '주권 또는 지분'인데 국내 상장 ETF는 투자신탁의 수익증권이라 대상이 아니다(증권거래세법 제2조, KRX ETF 세금제도). "
+        + "국내 주가지수를 1:1 추적하는 ETF는 매매차익도 비과세. 분배금은 배당소득세 15.4% 원천징수",
     }],
     other_etf: [{
       effectiveFrom: "2026-01-01",
       commissionRate: 0,
       sellTaxRate: 0,
-      basis: "채권형·원자재형 등. 매매차익 배당소득세는 이 모델이 아니라 계좌 과세로 별도 처리",
+      distributionTaxRate: 0.154,
+      basis:
+        "증권거래세 없음(투자신탁 수익증권). 다만 해외지수·상품·파생형은 매매차익에 보유기간 과세가 있어 "
+        + "이 모델이 아니라 계좌 과세로 별도 처리해야 한다. 분배금 15.4%",
     }],
   },
 };
@@ -119,6 +144,15 @@ export function tradeCost(model: CostModel, input: TradeCostInput, commissionOve
     cashDelta: side === "buy" ? -(grossAmount + commission) : grossAmount - commission - tax,
     scheduleBasis: schedule.basis,
   };
+}
+
+/**
+ * 분배금 원천징수액. 수정주가는 분배금을 세전으로 재투자한 것으로 보기 때문에,
+ * 이를 빼지 않으면 백테스트가 수익을 과대평가한다.
+ */
+export function distributionTax(model: CostModel, instrument: InstrumentClass, date: string, grossDistribution: number) {
+  if (!(grossDistribution > 0)) return 0;
+  return grossDistribution * resolveSchedule(model, instrument, date).distributionTaxRate;
 }
 
 /** 같은 규모로 한 번 사고 한 번 파는 데 드는 비용 비율. 전략 문턱 계산에 쓴다. */

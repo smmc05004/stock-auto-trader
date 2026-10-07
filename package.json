@@ -8,11 +8,14 @@
     "build:paper": "node scripts/build-paper.mjs",
     "backtest:etf": "node scripts/backtest-etf-candidates.mjs",
     "paper:probe": "node dist/paper-probe.cjs",
+    "manual-price:runner": "node dist/manual-price-runner.cjs",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run"
   },
   "dependencies": {
+    "@supabase/ssr": "^0.12.7",
+    "@supabase/supabase-js": "^2.117.2",
     "next": "^15.5.15",
     "react": "19.0.0",
     "react-dom": "19.0.0",

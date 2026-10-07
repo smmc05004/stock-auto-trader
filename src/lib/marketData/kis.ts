@@ -45,11 +45,21 @@ export function parseKisDailyRows(symbol: string, rows: KisDailyRow[], options: 
 
 export type KisDailyFetcher = (params: { symbol: string; start: string; end: string; adjusted: boolean }) => Promise<KisDailyRow[]>;
 
+/** KIS는 초당 호출 건수를 제한한다(모의 EGW00201). 페이지 사이에 간격을 두고, 걸리면 물러섰다 한 번만 다시 시도한다. */
+function isRateLimited(error: unknown) {
+  return /EGW00201|초당 거래건수/.test(error instanceof Error ? error.message : String(error));
+}
+
 /** KIS 일봉은 한 번에 최대 100건이라 구간을 나눠 모은다. 중복 날짜는 마지막 응답을 쓴다. */
 export async function collectDailyBars(fetcher: KisDailyFetcher, params: {
   symbol: string; start: string; end: string; adjusted: boolean; chunkDays?: number;
+  /** 페이지 사이 최소 간격. 호출 제한 회피용. */
+  delayMs?: number;
+  /** 대기 구현. 테스트에서 실제로 기다리지 않도록 주입한다. */
+  wait?: (ms: number) => Promise<void>;
 }): Promise<DailyBar[]> {
-  const { symbol, start, end, adjusted, chunkDays = 100 } = params;
+  const { symbol, start, end, adjusted, chunkDays = 100, delayMs = 0,
+    wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)) } = params;
   const byDate = new Map<string, DailyBar>();
   let cursor = Date.parse(`${end}T00:00:00Z`);
   const floor = Date.parse(`${start}T00:00:00Z`);
@@ -58,11 +68,22 @@ export async function collectDailyBars(fetcher: KisDailyFetcher, params: {
   while (cursor >= floor) {
     if (++guard > 200) throw new Error("Collection exceeded the expected number of requests");
     const chunkStart = Math.max(floor, cursor - (chunkDays - 1) * 86400_000);
-    const rows = await fetcher({
+    const request = {
       symbol, adjusted,
       start: new Date(chunkStart).toISOString().slice(0, 10),
       end: new Date(cursor).toISOString().slice(0, 10),
-    });
+    };
+    if (delayMs > 0) await wait(delayMs);
+    let rows: KisDailyRow[] | undefined;
+    for (let attempt = 0; attempt < 4 && rows === undefined; attempt++) {
+      try { rows = await fetcher(request); }
+      catch (error) {
+        // 호출 제한은 기다렸다 다시 시도한다. 그 밖의 오류는 즉시 드러낸다.
+        if (!isRateLimited(error) || attempt === 3) throw error;
+        await wait(Math.max(delayMs, 1000) * (attempt + 1) * 2);
+      }
+    }
+    if (rows === undefined) throw new Error("Daily chart request produced no result");
     if (!rows.length) break;
     for (const bar of parseKisDailyRows(symbol, rows, { adjusted })) byDate.set(bar.date, bar);
     cursor = chunkStart - 86400_000;
