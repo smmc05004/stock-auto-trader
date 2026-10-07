@@ -72,6 +72,12 @@ async function tick() {
   const buyOrder = await getOrder(cycle.id, "buy");
   const sellOrder = await getOrder(cycle.id, "sell");
 
+  // An intent without a broker id may have crossed the broker boundary before a
+  // response was lost. Never submit another order until a manual reconciliation
+  // proves that the intent was not accepted.
+  if (sellOrder && !sellOrder.broker_order_id) return "sell_needs_reconciliation";
+  if (buyOrder && !buyOrder.broker_order_id) return "buy_needs_reconciliation";
+
   const orderBroker = broker as unknown as Parameters<typeof remoteOrder>[0];
   if (sellOrder?.broker_order_id) {
     const remote = await remoteOrder(orderBroker, sellOrder.broker_order_id);
@@ -103,7 +109,8 @@ async function tick() {
       await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "selling", quantity: action.quantity }) });
       const intent = await saveOrder(cycle, { side: "sell", limitPrice: action.price, quantity: action.quantity, filledQuantity: 0 }, null, "intent");
       const result = await broker.placeOrder({ symbol: MANUAL_SYMBOL, side: "sell", type: "limit", quantity: action.quantity, limitPrice: action.price });
-      await updateOrder(intent, { broker_order_id: result.orderId, status: result.accepted ? "accepted" : "rejected", submitted_at: result.requestedAt });
+      await updateOrder(intent, { broker_order_id: result.accepted ? result.orderId : null, status: result.accepted ? "accepted" : "rejected", submitted_at: result.requestedAt });
+      if (!result.accepted) await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "blocked", last_error: result.message }) });
       return result.accepted ? "sell_submitted" : "sell_rejected";
     }
     return action.type === "wait" || action.type === "reconcile" ? action.reason : action.type;
@@ -115,7 +122,8 @@ async function tick() {
   await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "buying" }) });
   const intent = await saveOrder(cycle, { side: "buy", limitPrice: action.price, quantity: action.quantity, filledQuantity: 0 }, null, "intent");
   const result = await broker.placeOrder({ symbol: MANUAL_SYMBOL, side: "buy", type: "limit", quantity: action.quantity, limitPrice: action.price });
-  await updateOrder(intent, { broker_order_id: result.orderId, status: result.accepted ? "accepted" : "rejected", submitted_at: result.requestedAt });
+  await updateOrder(intent, { broker_order_id: result.accepted ? result.orderId : null, status: result.accepted ? "accepted" : "rejected", submitted_at: result.requestedAt });
+  if (!result.accepted) await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "blocked", last_error: result.message }) });
   return result.accepted ? "buy_submitted" : "buy_rejected";
 }
 
