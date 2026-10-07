@@ -36,6 +36,10 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  NEXT_PUBLIC_SUPABASE_URL: optionalUrl,
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: optionalString,
+  MANUAL_PRICE_DATABASE_URL: optionalString,
+  MANUAL_PRICE_WORKER_DATABASE_URL: optionalString,
 });
 
 export const env = envSchema.parse({
@@ -61,4 +65,8 @@ export const env = envSchema.parse({
   DUPLICATE_ORDER_WINDOW_MS: process.env.DUPLICATE_ORDER_WINDOW_MS,
   ORDER_EXECUTION_TOKEN: process.env.ORDER_EXECUTION_TOKEN,
   ALLOW_LIVE_TRADING: process.env.ALLOW_LIVE_TRADING,
+  NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+  NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+  MANUAL_PRICE_DATABASE_URL: process.env.MANUAL_PRICE_DATABASE_URL,
+  MANUAL_PRICE_WORKER_DATABASE_URL: process.env.MANUAL_PRICE_WORKER_DATABASE_URL,
 });
