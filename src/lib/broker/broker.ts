@@ -17,4 +17,5 @@ export interface BrokerClient {
   getAccountSummary(): Promise<AccountSummary>;
   getQuote(symbol: string): Promise<Quote>;
   placeOrder(order: OrderRequest): Promise<OrderResult>;
+  cancelOrder(orderId: string, quantity: number): Promise<OrderResult>;
 }

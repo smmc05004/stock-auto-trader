@@ -35,6 +35,26 @@ export async function POST(request: NextRequest) {
     const input = inputSchema.parse(await request.json());
     const preview = previewManualPrice({ buyPrice: input.buyPrice, sellPrice: input.sellPrice, budget: input.budget });
     const supabase = await createSupabaseServerClient();
+    const { data: latest, error: latestError } = await supabase
+      .from("manual_price_configs")
+      .select("*")
+      .eq("account_ref", env.BROKER_ACCOUNT_NO)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestError) throw latestError;
+    if (latest && latest.buy_price_krw === input.buyPrice && latest.sell_price_krw === input.sellPrice && latest.budget_krw === input.budget) {
+      return NextResponse.json({ config: latest, preview, duplicate: true });
+    }
+    const { data: openCycle, error: cycleError } = await supabase
+      .from("manual_price_cycles")
+      .select("id,status")
+      .eq("account_ref", env.BROKER_ACCOUNT_NO)
+      .not("status", "in", "(completed,blocked,needs_reconciliation)")
+      .limit(1)
+      .maybeSingle();
+    if (cycleError) throw cycleError;
+    if (openCycle) return NextResponse.json({ error: "진행 중인 매매 회차가 있어 가격을 변경할 수 없습니다.", code: "open_cycle" }, { status: 409 });
     const { data, error } = await supabase.from("manual_price_configs").insert({
       account_ref: env.BROKER_ACCOUNT_NO,
       mode: "paper",
@@ -49,6 +69,7 @@ export async function POST(request: NextRequest) {
       expected_net_profit_krw: preview.netProfit,
       commission_rate: preview.commissionRate,
       status: "pending",
+      expires_at: null,
     }).select().single();
     if (error) throw error;
     return NextResponse.json({ config: data, preview }, { status: 201 });

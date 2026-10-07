@@ -18,6 +18,8 @@ export type Quote = {
   changeRate: number;
   currency: string;
   timestamp: string;
+  bid?: number;
+  ask?: number;
 };
 
 export type Position = {

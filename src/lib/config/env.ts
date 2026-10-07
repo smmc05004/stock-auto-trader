@@ -40,6 +40,7 @@ const envSchema = z.object({
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: optionalString,
   MANUAL_PRICE_DATABASE_URL: optionalString,
   MANUAL_PRICE_WORKER_DATABASE_URL: optionalString,
+  MANUAL_PRICE_RUNNER_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
 });
 
 export const env = envSchema.parse({
@@ -69,4 +70,5 @@ export const env = envSchema.parse({
   NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
   MANUAL_PRICE_DATABASE_URL: process.env.MANUAL_PRICE_DATABASE_URL,
   MANUAL_PRICE_WORKER_DATABASE_URL: process.env.MANUAL_PRICE_WORKER_DATABASE_URL,
+  MANUAL_PRICE_RUNNER_ENABLED: process.env.MANUAL_PRICE_RUNNER_ENABLED,
 });
