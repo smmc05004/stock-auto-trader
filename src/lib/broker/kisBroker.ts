@@ -182,21 +182,16 @@ function getOrderDivision(order: OrderRequest) {
   return order.type === "market" ? "01" : "00";
 }
 
-function getOrderUnitPrice(order: OrderRequest) {
+export function getOrderUnitPrice(order: OrderRequest) {
   if (order.type === "market") {
     return "0";
   }
 
-  const price = order.limitPrice ?? 0;
-  const tick = price < 2_000 ? 1
-    : price < 5_000 ? 5
-      : price < 20_000 ? 10
-        : price < 50_000 ? 50
-          : price < 200_000 ? 100
-            : price < 500_000 ? 500
-              : price < 1_000_000 ? 1_000
-                : price < 2_000_000 ? 2_000 : 5_000;
-  return String(Math.floor(price / tick) * tick);
+  const price = order.limitPrice;
+  if (!Number.isSafeInteger(price) || !price || price <= 0) {
+    throw new Error("Limit price must be a positive integer; it will not be rounded.");
+  }
+  return String(price);
 }
 
 async function readJsonResponse<T>(response: Response): Promise<T> {

@@ -81,6 +81,7 @@ jobs:
       group: paper-ec2-deployment
       cancel-in-progress: false
     env:
+      PAPER_RUNNER_MODE: ${{ vars.PAPER_RUNNER_MODE }}
       AWS_REGION: ap-northeast-2
       ECR_REPOSITORY: ${{ vars.PAPER_ECR_REPOSITORY }}
       DESIRED_PARAMETER: ${{ vars.PAPER_DESIRED_PARAMETER }}
