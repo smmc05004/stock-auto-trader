@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       .from("manual_price_cycles")
       .select("id,status")
       .eq("account_ref", env.BROKER_ACCOUNT_NO)
-      .not("status", "in", "(completed,blocked,needs_reconciliation)")
+      .neq("status", "completed")
       .limit(1)
       .maybeSingle();
     if (cycleError) throw cycleError;

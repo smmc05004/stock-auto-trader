@@ -1,3 +1,5 @@
+import { executionSnapshot, koreaOrderDate, matchStoredOrder } from "../src/lib/manualPrice/recovery";
+import type { PaperDailyOrder } from "../src/lib/broker/paperOrders";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { env } from "../src/lib/config/env";
@@ -5,7 +7,7 @@ import { createBrokerClient } from "../src/lib/broker";
 import { MANUAL_SYMBOL } from "../src/lib/manualPrice/validation";
 import { onBuyStatus, onQuote, onSellStatus, type ManualEngineState, type ManualOrder } from "../src/lib/manualPrice/engine";
 
-type Config = { id: string; buy_price_krw: number; sell_price_krw: number; planned_quantity: number; status: string };
+type Config = { id: string; buy_price_krw: number; sell_price_krw: number; planned_quantity: number; commission_rate: number; status: string };
 type Cycle = { id: string; config_id: string; status: string; quantity: number };
 type StoredOrder = { id: string; cycle_id: string; side: "buy" | "sell"; limit_price_krw: number; requested_quantity: number; broker_order_id: string | null; status: string; filled_quantity: number; submitted_at: string | null };
 
@@ -28,13 +30,16 @@ async function db(path: string, init: RequestInit = {}) {
 }
 
 async function getConfig(): Promise<Config | null> {
-  const rows = await db(`manual_price_configs?select=id,buy_price_krw,sell_price_krw,planned_quantity,status&account_ref=eq.${encodeURIComponent(env.BROKER_ACCOUNT_NO)}&order=created_at.desc&limit=1`) as Config[];
+  const rows = await db(`manual_price_configs?select=id,buy_price_krw,sell_price_krw,planned_quantity,commission_rate,status&account_ref=eq.${encodeURIComponent(env.BROKER_ACCOUNT_NO)}&order=created_at.desc&limit=1`) as Config[];
   return rows[0] ?? null;
 }
 
 async function getCycle(configId: string): Promise<Cycle> {
-  const rows = await db(`manual_price_cycles?select=id,config_id,status,quantity&config_id=eq.${configId}&status=not.in.(completed,blocked,needs_reconciliation)&order=started_at.desc&limit=1`) as Cycle[];
-  if (rows[0]) return rows[0];
+  const rows = await db(`manual_price_cycles?select=id,config_id,status,quantity&account_ref=eq.${encodeURIComponent(env.BROKER_ACCOUNT_NO)}&status=neq.completed&order=started_at.desc&limit=1`) as Cycle[];
+  if (rows[0]) {
+    if (rows[0].config_id !== configId) throw new Error("Unfinished cycle uses a different configuration");
+    return rows[0];
+  }
   const rowsCreated = await db("manual_price_cycles", { method: "POST", headers: { Prefer: "return=representation" }, body: JSON.stringify({ account_ref: env.BROKER_ACCOUNT_NO, config_id: configId, status: "waiting_buy", quantity: 0 }) }) as Cycle[];
   if (!rowsCreated[0]) throw new Error("Could not create manual price cycle.");
   return rowsCreated[0];
@@ -55,12 +60,11 @@ async function updateOrder(order: StoredOrder, values: Record<string, unknown>) 
   await db(`manual_price_orders?id=eq.${order.id}`, { method: "PATCH", body: JSON.stringify({ ...values, updated_at: new Date().toISOString() }) });
 }
 
-async function remoteOrder(broker: { getPaperDailyOrders: (start: string, end: string) => Promise<Array<{ orderId: string; filledQuantity: number; remainingQuantity: number; cancelled: boolean; rejectedQuantity: number; averagePrice: number }>> }, orderId: string) {
-  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "");
-  const rows = await broker.getPaperDailyOrders(today, today);
-  const suffix = orderId.split("-").at(-1);
-  const row = rows.find((candidate) => candidate.orderId === suffix);
-  return row ?? null;
+async function remoteOrder(broker: { getPaperDailyOrders: (start: string, end: string) => Promise<PaperDailyOrder[]> }, order: StoredOrder) {
+  if (!order.submitted_at) throw new Error("Missing order submission date");
+  const start = koreaOrderDate(order.submitted_at);
+  const end = koreaOrderDate(new Date().toISOString());
+  return matchStoredOrder(await broker.getPaperDailyOrders(start, end), order, MANUAL_SYMBOL);
 }
 
 async function tick() {
@@ -68,6 +72,7 @@ async function tick() {
   if (!config || config.status === "cancelled") return "no_config";
   const broker = createBrokerClient();
   const cycle = await getCycle(config.id);
+  if (["blocked", "needs_reconciliation"].includes(cycle.status)) return cycle.status;
   const state: ManualEngineState = { phase: cycle.status === "buying" ? "buying" : cycle.status === "selling" ? "selling" : "waiting_buy", completedCycles: 0 };
   const buyOrder = await getOrder(cycle.id, "buy");
   const sellOrder = await getOrder(cycle.id, "sell");
@@ -75,36 +80,46 @@ async function tick() {
   // An intent without a broker id may have crossed the broker boundary before a
   // response was lost. Never submit another order until a manual reconciliation
   // proves that the intent was not accepted.
+  if (sellOrder?.status === "rejected" || buyOrder?.status === "rejected") return "order_rejected";
   if (sellOrder && !sellOrder.broker_order_id) return "sell_needs_reconciliation";
   if (buyOrder && !buyOrder.broker_order_id) return "buy_needs_reconciliation";
 
   const orderBroker = broker as unknown as Parameters<typeof remoteOrder>[0];
   if (sellOrder?.broker_order_id) {
-    const remote = await remoteOrder(orderBroker, sellOrder.broker_order_id);
+    const remote = await remoteOrder(orderBroker, sellOrder);
     if (!remote) return "sell_reconcile_pending";
-    await updateOrder(sellOrder, { filled_quantity: remote.filledQuantity, status: remote.remainingQuantity === 0 ? (remote.cancelled ? "cancelled" : "filled") : "partially_filled" });
+    await updateOrder(sellOrder, { ...executionSnapshot(remote, config.commission_rate), status: remote.remainingQuantity === 0 ? (remote.cancelled ? "cancelled" : "filled") : "partially_filled" });
     state.phase = "selling";
     state.sell = { side: "sell", limitPrice: sellOrder.limit_price_krw, quantity: sellOrder.requested_quantity, filledQuantity: sellOrder.filled_quantity };
     const action = onSellStatus(state, remote.filledQuantity, remote.remainingQuantity);
     if (action.type === "wait" && action.reason === "cycle_completed") {
-      await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "completed", quantity: remote.filledQuantity, completed_at: new Date().toISOString() }) });
+      if (!buyOrder) throw new Error("Completed sell has no recorded buy");
+      const buyRemote = await remoteOrder(orderBroker, buyOrder);
+      if (!buyRemote || buyRemote.filledQuantity !== remote.filledQuantity) return "completion_needs_reconciliation";
+      const buyTotals = executionSnapshot(buyRemote, config.commission_rate);
+      const sellTotals = executionSnapshot(remote, config.commission_rate);
+      const estimatedPnl = sellTotals.filled_amount_krw - buyTotals.filled_amount_krw - buyTotals.estimated_fee_krw - sellTotals.estimated_fee_krw;
+      await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "completed", estimated_pnl_krw: estimatedPnl, quantity: remote.filledQuantity, completed_at: new Date().toISOString() }) });
       return "cycle_completed";
     }
     return action.type === "wait" || action.type === "reconcile" ? action.reason : action.type;
   }
 
   if (buyOrder?.broker_order_id) {
-    const remote = await remoteOrder(orderBroker, buyOrder.broker_order_id);
+    const remote = await remoteOrder(orderBroker, buyOrder);
     if (!remote) return "buy_reconcile_pending";
-    await updateOrder(buyOrder, { filled_quantity: remote.filledQuantity, status: remote.remainingQuantity === 0 ? (remote.cancelled ? "cancelled" : "filled") : "partially_filled" });
+    await updateOrder(buyOrder, { ...executionSnapshot(remote, config.commission_rate), status: remote.remainingQuantity > 0 && ["cancel_pending", "unknown"].includes(buyOrder.status) ? buyOrder.status : remote.remainingQuantity === 0 ? (remote.cancelled ? "cancelled" : "filled") : "partially_filled" });
     state.phase = "buying";
     state.buy = { side: "buy", limitPrice: buyOrder.limit_price_krw, quantity: buyOrder.requested_quantity, filledQuantity: buyOrder.filled_quantity };
-    if (remote.remainingQuantity > 0 && buyOrder.submitted_at && Date.now() - Date.parse(buyOrder.submitted_at) > CANCEL_AFTER_MS) {
+    if (remote.remainingQuantity > 0 && buyOrder.status !== "cancel_pending" && buyOrder.status !== "unknown" && buyOrder.submitted_at && Date.now() - Date.parse(buyOrder.submitted_at) > CANCEL_AFTER_MS) {
       const cancellation = await broker.cancelOrder(buyOrder.broker_order_id, remote.remainingQuantity);
       await updateOrder(buyOrder, { status: cancellation.accepted ? "cancel_pending" : "unknown" });
       return cancellation.accepted ? "buy_cancel_pending" : "buy_cancel_unknown";
     }
     const action = onBuyStatus(state, { buyPrice: config.buy_price_krw, sellPrice: config.sell_price_krw, plannedQuantity: config.planned_quantity }, remote.filledQuantity, remote.remainingQuantity);
+    if (action.type === "wait" && action.reason === "buy_cancelled_without_fill") {
+      await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "blocked", last_error: "Unfilled buy cancelled; reconciliation required before retry" }) });
+    }
     if (action.type === "submit_sell") {
       await db(`manual_price_cycles?id=eq.${cycle.id}`, { method: "PATCH", body: JSON.stringify({ status: "selling", quantity: action.quantity }) });
       const intent = await saveOrder(cycle, { side: "sell", limitPrice: action.price, quantity: action.quantity, filledQuantity: 0 }, null, "intent");
