@@ -41,7 +41,8 @@ o={x['OutputKey']:x['OutputValue'] for x in raw}
 assert o['DesiredParameter']=='/'+sys.argv[1]+'/desired'
 assert o['Region']=='ap-northeast-2'
 config={'repository':o['Repository'],'region':o['Region'],'desiredParameter':o['DesiredParameter'],
-        'statusParameter':o['StatusParameter'],'volume':sys.argv[2]}
+        'statusParameter':o['StatusParameter'],'volume':sys.argv[2],
+        'manualVolume':sys.argv[2]+'-manual-price'}
 Path('/etc/stock-range/deploy.json').write_text(json.dumps(config,indent=2)+'\n')
 PY
 install -m 644 "$bundle_dir/stock-range-reconcile.service" "$bundle_dir/stock-range-reconcile.timer" /etc/systemd/system/

@@ -8,6 +8,8 @@
 
 애플리케이션 이미지만 자동 교체한다. 호스트 제어기·Compose·systemd 변경은 별도 설치/업그레이드 작업이 필요하며, 앱 배포 성공만으로 호스트 변경도 적용됐다고 보고하지 않는다. 배포 프로토콜 또는 DB 스키마 라벨이 달라지면 현재 제어기는 적용을 거부한다.
 
+현재 이미지 배포 작업은 `/opt/stock-range-deploy`의 호스트 운영 파일을 자동으로 교체하지 않는다. `manual-price` 같은 새 Compose 서비스는 아래 호스트 업그레이드 절차를 먼저 적용해야 한다.
+
 ## 1. 최초 AWS 설정
 
 1. AWS 서울 리전 CloudFormation에서 `deploy/image/infrastructure.json`으로 스택을 생성한다. 예시 스택명은 `stock-paper-images`다. IAM 리소스 생성을 확인한다.
@@ -76,6 +78,34 @@ GitHub 작업은 오프라인/대기 상태를 Summary에 명시하고 종료할
 타이머는 작업 종료 후 30초마다 실행한다. 신규 매수 허가는 180초 유효하며 부팅 ID와 실행 커밋에 귀속된다. 제어기 장애·AWS 조회 실패 시 신규 매수는 중지되고 기존 매도·계좌 대조는 계속한다. 기존 전략의 매도 조건을 배포 때문에 강제 청산으로 바꾸지 않는다.
 
 ## 5. 실패 복구와 제어기 업데이트
+
+### 5-1. 호스트 운영 파일 업그레이드
+
+애플리케이션 이미지와 호스트 Compose·systemd·reconcile 파일은 별도 릴리스 대상이다. 기존 실행기가 계좌 대조에서 보유·미체결 0이고 `safeToStop=true`인 장외 상태에서만 진행한다.
+
+검토·머지된 커밋의 `deploy/image/` 묶음을 운영 호스트에 버전으로 전달한 뒤, 타이머를 멈추고 다음 스크립트를 실행한다. 작업 브랜치 파일이나 비커밋 파일을 서버에 복사하지 않는다.
+
+```bash
+sudo systemctl stop stock-range-reconcile.timer
+sudo bash deploy/image/upgrade-host.sh \\
+  stock-auto-trader_range-data \\
+  stock-auto-trader_manual-price-data
+```
+
+스크립트는 실행 중인 Compose 컨테이너가 있으면 중단하고, 기존 `range` 볼륨은 보존한다. 지정가 전용 외부 볼륨이 없으면 새로 만들며 기존 원장 볼륨을 재사용하지 않는다. `/etc/stock-range/deploy.json`에는 두 볼륨 이름을 기록하고 환경 파일·SQLite를 변경하지 않는다.
+
+적용 후 Compose 서비스 목록을 프로파일과 함께 확인한다.
+
+```bash
+sudo env \\
+  RANGE_IMAGE="$IMAGE_DIGEST" \\
+  RANGE_VOLUME=stock-auto-trader_range-data \\
+  MANUAL_PRICE_VOLUME=stock-auto-trader_manual-price-data \\
+  docker compose -f /opt/stock-range-deploy/compose.yaml \\
+  --profile manual-price config --services
+```
+
+`range`와 `manual-price`가 모두 출력되어야 한다. 새 지정가 실행기는 별도 명령으로만 시작하며 기존 `range` 실행기와 동시에 실행하지 않는다.
 
 - 실행 중 교체는 새 매수 차단, 진행 중 tick 종료 및 최신 flat 조회 확인, SQLite `VACUUM INTO` 백업, SIGTERM 종료, 새 이미지 시작 순서다. 종료 제한 시간을 넘으면 강제 kill하지 않는다.
 - 새 이미지에 주문 허가를 주기 전에 검증한다. 실패 시 같은 DB로 직전 호환 이미지를 시작하고 신규 매수는 계속 차단한다. DB 파일을 백업으로 덮어쓰지 않는다.
