@@ -138,6 +138,15 @@ class DeployTests(unittest.TestCase):
         self.assertEqual(p.stat().st_mode & 0o777,0o644)
         self.assertFalse(json.loads(p.read_text())['allow'])
 
+    def test_compose_always_supplies_manual_price_volume(self):
+        self.d.run = Mock(return_value='')
+        self.d.config['volume'] = 'range-data'
+        self.d.compose(A, 'config')
+        env = self.d.run.call_args.kwargs['env']
+        self.assertEqual(env['RANGE_IMAGE'], A['image'])
+        self.assertEqual(env['RANGE_VOLUME'], 'range-data')
+        self.assertEqual(env['MANUAL_PRICE_VOLUME'], 'range-data-manual-price')
+
     def test_readiness_rejects_stale_snapshot_inflight_wrong_image_and_halt(self):
         now=int(time.time()*1000)
         r={'gitCommit':B['commit'],'mode':'KIS PAPER ONLY','status':'running','safeToStop':True,

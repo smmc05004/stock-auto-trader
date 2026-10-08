@@ -37,7 +37,7 @@ jobs:
           python3 -m venv /tmp/cfn-check
           /tmp/cfn-check/bin/pip install cfn-lint==1.56.3
           /tmp/cfn-check/bin/cfn-lint deploy/image/infrastructure.json
-          bash -n deploy/image/install.sh
+          bash -n deploy/image/install.sh deploy/image/upgrade-host.sh
 
       - name: Run lint
         run: npm run lint

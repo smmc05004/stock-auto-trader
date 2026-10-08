@@ -95,7 +95,11 @@ class Deployer:
             print('Status upload unavailable; local status retained', flush=True)
 
     def compose(self, release, *args):
-        env = dict(os.environ, RANGE_IMAGE=release['image'], RANGE_VOLUME=self.config['volume'])
+        # Compose parses the optional manual-price service even when its profile
+        # is inactive, so its external volume must always be supplied.
+        manual_volume = self.config.get('manualVolume') or f"{self.config['volume']}-manual-price"
+        env = dict(os.environ, RANGE_IMAGE=release['image'], RANGE_VOLUME=self.config['volume'],
+                   MANUAL_PRICE_VOLUME=manual_volume)
         return self.run(['docker', 'compose', '-f', '/opt/stock-range-deploy/compose.yaml',
                          *args], timeout=120, env=env)
 
