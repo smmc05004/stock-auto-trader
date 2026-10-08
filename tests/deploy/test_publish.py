@@ -34,6 +34,12 @@ class PublishTests(unittest.TestCase):
             return json.dumps({'Parameter':{'Value':json.dumps(self.status)}})
         return ''
 
+    def test_manual_mode_publishes_without_restarting_range(self):
+        with patch.dict(os.environ, {'PAPER_RUNNER_MODE': 'manual-price'}), patch.object(m, 'run', side_effect=self.run_command):
+            m.main()
+        self.assertFalse(any('send-command' in call for call in self.calls))
+        self.assertIn('Pending host activation', Path(os.environ['GITHUB_STEP_SUMMARY']).read_text())
+
     def test_old_commit_cannot_publish_target(self):
         self.head='c'*40
         with patch.object(m,'run',side_effect=self.run_command): m.main()

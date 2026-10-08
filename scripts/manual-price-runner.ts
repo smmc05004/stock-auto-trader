@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { env } from "../src/lib/config/env";
 import { createBrokerClient } from "../src/lib/broker";
+import { KisBrokerClient } from "../src/lib/broker/kisBroker";
 import { MANUAL_SYMBOL } from "../src/lib/manualPrice/validation";
 import { onBuyStatus, onQuote, onSellStatus, type ManualEngineState, type ManualOrder } from "../src/lib/manualPrice/engine";
 
@@ -16,7 +17,7 @@ const CANCEL_AFTER_MS = 5 * 60_000;
 
 function assertPaper() {
   if (env.TRADING_MODE !== "paper" || env.ALLOW_LIVE_TRADING) throw new Error("Manual price runner is paper-only.");
-  if (!env.MANUAL_PRICE_RUNNER_ENABLED) throw new Error("Manual price runner is disabled.");
+  if (!process.argv.includes("--check") && !env.MANUAL_PRICE_RUNNER_ENABLED) throw new Error("Manual price runner is disabled.");
   if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) throw new Error("Supabase API environment is not configured.");
 }
 
@@ -144,6 +145,29 @@ async function tick() {
 
 async function main() {
   assertPaper();
+  if (process.argv.includes("--check")) {
+    if (env.BROKER_PROVIDER !== "kis") throw new Error("Preflight requires KIS paper broker");
+    const config = await getConfig();
+    if (!config || config.status === "cancelled") throw new Error("No usable saved configuration");
+    // Read column names explicitly so a missing migration fails before trading.
+    await db("manual_price_orders?select=id,filled_amount_krw,estimated_fee_krw,costs_confirmed&limit=1");
+    await db("manual_price_cycles?select=id,estimated_pnl_krw&limit=1");
+    const cycles = await db(`manual_price_cycles?select=id,status&account_ref=eq.${encodeURIComponent(env.BROKER_ACCOUNT_NO)}&status=neq.completed&limit=2`) as Cycle[];
+    const broker = new KisBrokerClient();
+    const account = await broker.getAccountSummary();
+    const today = koreaOrderDate(new Date().toISOString());
+    const orders = await broker.getPaperDailyOrders(today, today);
+    const held = account.positions.reduce((total, item) => total + item.quantity, 0);
+    const open = orders.filter(order => order.remainingQuantity > 0 && !order.cancelled);
+    console.log(JSON.stringify({ event: "manual_price_preflight", ordersSubmitted: 0,
+      buyPrice: config.buy_price_krw, sellPrice: config.sell_price_krw,
+      plannedQuantity: config.planned_quantity, holdings: held,
+      todayOpenOrders: open.length, unfinishedCycles: cycles.length,
+      flat: held === 0 && open.length === 0,
+      note: "Read-only diagnostic; not authorization to trade. Historical unknown orders and market data still require verification." }));
+    if (held !== 0 || open.length || cycles.length) process.exitCode = 2;
+    return;
+  }
   console.log(JSON.stringify({ event: "manual_price_runner_started", pollMs: POLL_MS }));
   while (true) {
     try { const result = await tick(); if (result !== "no_config") console.log(JSON.stringify({ event: "manual_price_tick", result })); }

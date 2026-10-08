@@ -53,6 +53,9 @@ def main():
     desired = {'protocol': 1, 'commit': commit, 'image': image, 'releaseId': env['RELEASE_ID']}
     run('aws', 'ssm', 'put-parameter', '--name', env['DESIRED_PARAMETER'], '--type', 'String',
         '--overwrite', '--value', json.dumps(desired))
+    if (env.get('PAPER_RUNNER_MODE') or 'range') != 'range':
+        summary('**Pending host activation**: image and target published. Range reconciler was not invoked; manual runner requires host preflight and explicit activation.')
+        return
     nodes = json.loads(run('aws', 'ssm', 'describe-instance-information', '--filters',
                            json.dumps([{'Key': 'InstanceIds', 'Values': [env['INSTANCE_ID']]}])))
     if not any(n['PingStatus'] == 'Online' for n in nodes['InstanceInformationList']):

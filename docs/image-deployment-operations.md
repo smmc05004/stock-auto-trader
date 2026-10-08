@@ -135,3 +135,9 @@ sudo env \\
 - 보고서: `revision=evaluation-clock-20260916`, `status=running`, `deployment.allowed=true`, `ordersArmed=true`, 보유 0·주문 없음. 실현손익 -11.79395823원 유지. 백업 대비 quotes 37,932→37,968, events 12,648→12,667로 과거 기록 보존 확인.
 - 전환으로 생긴 시세 공백 약 203초 때문에 `data_gap_30m` 대기. 추가 공백이 없을 때 약 14:22 KST 해제 예상. 주문 허가와 실제 체결·전략 데이터 준비는 별개다. 조회 지연 수정의 연속 30분 운영 검증은 이후 확인해야 한다.
 - 이후 main 머지부터 자동 이미지 배포 대상이다. 이 기록 자체의 PR은 운영 문서 갱신이며 추가 서버 전환을 의미하지 않는다.
+
+### 지정가 전환 중 이미지 발행
+
+GitHub Actions 변수 `PAPER_RUNNER_MODE=manual-price`인 동안 main CI는 ECR 이미지와 목표 버전만 발행하고 range SSM 호출을 생략한다. 결과는 `Pending host activation`이며 서버 배포 완료를 뜻하지 않는다. EC2의 range 서비스 mask를 유지한다. 빈 값 또는 range는 기존 range 배포 절차이므로 전환 중 변경하지 않는다.
+
+새 이미지의 `node manual-price-runner.cjs --check`는 주문 없는 진단이다. 003 DB 마이그레이션, 저장 설정, 보유·당일 주문·미완료 회차를 확인한다. 정상 출력도 거래 인수 완료를 의미하지 않는다.
